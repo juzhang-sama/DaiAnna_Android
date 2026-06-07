@@ -79,6 +79,83 @@ assert.equal(fuzzy.matched, true);
 assert.equal(fuzzy.normalized, '广发银行股份有限公司');
 assert.equal(fuzzy.statusLabel, '机构库精确匹配');
 
+const consumerFinance = normalizeInstitutionName('河南中原消费金融股份有限公司');
+assert.equal(consumerFinance.matched, true);
+assert.equal(consumerFinance.normalized, '河南中原消费金融股份有限公司');
+
+const guarantee = normalizeInstitutionName('深圳市乐信融资担保有限公司');
+assert.equal(guarantee.matched, true);
+assert.equal(guarantee.normalized, '深圳市乐信融资担保有限公司');
+
+const pingAnGuarantee = normalizeInstitutionName('平安融易（江苏）融资担保有限公司');
+assert.equal(pingAnGuarantee.matched, true);
+assert.equal(pingAnGuarantee.normalized, '平安融易（江苏）融资担保有限公司');
+
+const leasing = normalizeInstitutionName('狮桥融资租赁（中国）有限公司');
+assert.equal(leasing.matched, true);
+assert.equal(leasing.normalized, '狮桥融资租赁（中国）有限公司');
+
+const htscLeasing = normalizeInstitutionName('汇通信诚租赁有限公司');
+assert.equal(htscLeasing.matched, true);
+assert.equal(htscLeasing.normalized, '汇通信诚租赁有限公司');
+
+const zhongguancunBank = normalizeInstitutionName('中关村银行');
+assert.equal(zhongguancunBank.matched, true);
+assert.equal(zhongguancunBank.normalized, '北京中关村银行股份有限公司');
+
+const zrxGuarantee = normalizeInstitutionName('中融信融资担保（大连）股份有限公司');
+assert.equal(zrxGuarantee.matched, true);
+assert.equal(zrxGuarantee.normalized, '中融信融资担保（大连）股份有限公司');
+
+const webankFullName = normalizeInstitutionName('深圳前海微众银行股份有限公司');
+assert.equal(webankFullName.matched, true);
+assert.equal(webankFullName.normalized, '微众银行股份有限公司');
+
+const webankTruncated = normalizeInstitutionName('深圳前海微众银行股份有限公');
+assert.equal(webankTruncated.matched, true);
+assert.equal(webankTruncated.normalized, '微众银行股份有限公司');
+
+const ccbBranch = normalizeInstitutionName('中国建设银行股份有限公司天津大港支行');
+assert.equal(ccbBranch.matched, true);
+assert.equal(ccbBranch.normalized, '中国建设银行股份有限公司');
+
+const cebCardCenter = normalizeInstitutionName('中国光大银行股份有限公司信用卡中');
+assert.equal(cebCardCenter.matched, true);
+assert.equal(cebCardCenter.normalized, '中国光大银行股份有限公司');
+
+const cmbCardCenter = normalizeInstitutionName('招商银行股份有限公司信用卡中心天津分中心');
+assert.equal(cmbCardCenter.matched, true);
+assert.equal(cmbCardCenter.normalized, '招商银行股份有限公司');
+
+const icbcCardCenter = normalizeInstitutionName('中国工商银行股份有限公司银行卡业务部（牡丹卡中心）');
+assert.equal(icbcCardCenter.matched, true);
+assert.equal(icbcCardCenter.normalized, '中国工商银行股份有限公司');
+
+const shengjingTruncatedBranch = normalizeInstitutionName('盛京银行股份有限公司沈阳分');
+assert.equal(shengjingTruncatedBranch.matched, true);
+assert.equal(shengjingTruncatedBranch.normalized, '盛京银行股份有限公司');
+
+const shengjingBrokenSuffix = normalizeInstitutionName('盛京银行股 有限 公司沈');
+assert.equal(shengjingBrokenSuffix.matched, true);
+assert.equal(shengjingBrokenSuffix.normalized, '盛京银行股份有限公司');
+
+const weihaiSuffixTypo = normalizeInstitutionName('威海银行股份有限公公司');
+assert.equal(weihaiSuffixTypo.matched, true);
+assert.equal(weihaiSuffixTypo.normalized, '威海银行股份有限公司');
+
+const ocrTypo = normalizeInstitutionName('兴业消费全融股份公司');
+assert.equal(ocrTypo.matched, true);
+assert.equal(ocrTypo.normalized, '兴业消费金融股份公司');
+
+const amountFragment = normalizeInstitutionName('10,000');
+assert.equal(amountFragment.matched, false);
+assert.equal(amountFragment.status, 'review');
+
+const fragment = normalizeInstitutionName('信用卡中心');
+assert.equal(fragment.matched, false);
+assert.equal(fragment.status, 'review');
+assert.equal(fragment.statusLabel, '疑似机构残片，请复核');
+
 const unknown = normalizeInstitutionName('某某测试机构');
 assert.equal(unknown.matched, false);
 assert.equal(unknown.status, 'unlisted');

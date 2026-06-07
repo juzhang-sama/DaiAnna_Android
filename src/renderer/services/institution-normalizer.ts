@@ -40,6 +40,10 @@ export function normalizeInstitutionName(raw: string): InstitutionNormalizationR
   const comparable = normalizeComparableName(cleaned);
   const uncertainOcr = hasUncertainOcrMarker(cleaned);
 
+  if (isLikelyInstitutionFragment(cleaned)) {
+    return buildResult(original, cleaned, 0, false, false, 'review', '疑似机构残片，请复核', 'none', []);
+  }
+
   if (!comparable) {
     return buildResult(original, cleaned, 0, false, false, 'unlisted', '该机构未被收录', 'none', []);
   }
@@ -56,6 +60,37 @@ export function normalizeInstitutionName(raw: string): InstitutionNormalizationR
       exact.alias === exact.name ? '机构库精确匹配' : '经机构库别名匹配',
       exact.alias === exact.name ? 'exact' : 'alias',
       [exact.name],
+    );
+  }
+
+  const embeddedAlias = INSTITUTION_ALIASES
+    .filter((item) => item.normalizedAlias.length >= 4 && comparable.includes(item.normalizedAlias))
+    .sort((a, b) => b.normalizedAlias.length - a.normalizedAlias.length);
+  if (embeddedAlias.length > 0) {
+    const candidates = uniqueNames(embeddedAlias);
+    if (uncertainOcr || candidates.length > 1) {
+      return buildResult(
+        original,
+        embeddedAlias[0].name,
+        0.92,
+        false,
+        false,
+        'review',
+        '疑似机构，请复核',
+        'none',
+        candidates,
+      );
+    }
+    return buildResult(
+      original,
+      embeddedAlias[0].name,
+      0.94,
+      true,
+      true,
+      'matched',
+      '经机构库匹配',
+      'contains',
+      candidates,
     );
   }
 
@@ -254,15 +289,27 @@ function cleanInstitutionText(raw: string): string {
     .replace(/\\n/g, '\n')
     .split('\n')
     .map((line) => line.trim())
-    .find((line) => /银行|消费金融|小额贷款|小贷|汽车金融|信用社|合作社/.test(line)) ?? raw.trim();
+    .find((line) =>
+      /银行|消费金融|小额贷款|小贷|汽车金融|信用社|合作社|融资担保|担保|融资租赁|信托|财务公司/.test(line),
+    ) ?? raw.trim();
 }
 
 function hasUncertainOcrMarker(value: string): boolean {
   return /[■□�]/.test(value);
 }
 
+function isLikelyInstitutionFragment(value: string): boolean {
+  const cleaned = value.trim();
+  if (!cleaned) return false;
+  if (/^[\d,，.。:\-—年月日\s]+$/.test(cleaned)) return true;
+  if (/^(信用卡中心|牡丹卡中心|销售中心|客服中心|分中心|网上银行|商业银行)$/.test(cleaned)) return true;
+  if (/^[\u4e00-\u9fa5]{0,6}(?:信用卡中心|牡丹卡中心|销售中心|分中心)$/.test(cleaned)) return true;
+  if (/^(?:股份|股|份|有限|公司|行股份|银行股份|小额贷款|消费金融)(?:有限)?(?:公司)?$/.test(cleaned)) return true;
+  return false;
+}
+
 function normalizeComparableName(value: string): string {
-  return value
+  return stripInstitutionUnitSuffix(value)
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
     .replace(/贷[A-Za-z0-9]{2,}款/g, '贷款')
     .replace(/彳亍/g, '行')
@@ -271,10 +318,34 @@ function normalizeComparableName(value: string): string {
     .replace(/帐/g, '账')
     .replace(/贷欵/g, '贷款')
     .replace(/小颁/g, '小额')
+    .replace(/消费全融/g, '消费金融')
+    .replace(/股份有限公公司/g, '股份有限公司')
+    .replace(/有限公公司/g, '有限公司')
+    .replace(/股付公司|股份公公司/g, '股份公司')
+    .replace(/股份有限公(?!司)/g, '股份有限公司')
+    .replace(/有限公(?!司)/g, '有限公司')
+    .replace(/网网络/g, '网络')
+    .replace(/络小额/g, '网络小额')
     .replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '')
     .replace(/股份有限公司|有限责任公司|有限公司|股份公司/g, '')
     .replace(/中国/g, '')
     .toLowerCase();
+}
+
+function stripInstitutionUnitSuffix(value: string): string {
+  let next = value
+    .replace(/\s+/g, '')
+    .replace(/[（]/g, '(')
+    .replace(/[）]/g, ')');
+
+  // 银行分支、信用卡中心通常不是独立报送机构，先归到总行/总公司再匹配机构库。
+  next = next.replace(
+    /(股份有限公司|有限责任公司|有限公司|股份公司)(?:[\u4e00-\u9fa5]{0,30}(?:信用卡中心|信用卡中|信用卡部|银行卡中心|银行卡业务部|银行卡部|牡丹卡中心|分中心|分行|支行|营业部|营业室|分理处|分))+.*$/,
+    '$1',
+  );
+  next = next.replace(/(?:信用卡中心|信用卡中|信用卡部|银行卡中心|银行卡业务部|银行卡部|牡丹卡中心)(?:[\u4e00-\u9fa5]{0,12}分中心)?$/, '');
+  next = next.replace(/[\u4e00-\u9fa5]{0,30}(?:分行|支行|营业部|营业室|分理处|分)$/, '');
+  return next;
 }
 
 function uniqueNames(items: Array<{ name: string }>): string[] {

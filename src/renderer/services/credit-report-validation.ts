@@ -101,6 +101,9 @@ function validateRevolvingLoan2(
     if (active && zeroish(account.monthlyPayment) && (account.balance ?? 0) > 0) {
       push(issue('warning', '循环贷账户二', `${prefix}.monthlyPayment`, `${account.org || '循环贷账户二'}有余额但本月应还为0`, '请核对“本月应还款”字段。'));
     }
+    if (active && (account.monthlyPayment ?? 0) > 0 && (account.balance ?? 0) > 0 && (account.monthlyPayment ?? 0) > (account.balance ?? 0) * 1.2) {
+      push(issue('critical', '循环贷账户二', `${prefix}.monthlyPayment`, `${account.org || '循环贷账户二'}本月应还异常高`, '本月应还超过余额，疑似小数点、千分位或列错位。'));
+    }
   });
 }
 

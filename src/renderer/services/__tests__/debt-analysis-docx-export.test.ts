@@ -67,17 +67,20 @@ assert.ok(files['word/styles.xml']);
 
 const documentXml = strFromU8(files['word/document.xml']);
 
-assert.match(documentXml, /客户降低月供分析简版报告/);
-assert.match(documentXml, /债务类别/);
-assert.match(documentXml, /结构洞察/);
-assert.match(documentXml, /非房贷债务占比较高/);
-assert.match(documentXml, /降低月供方案对比/);
-assert.match(documentXml, /不影响征信方案/);
+assert.match(documentXml, /客户降低月供分析建议书/);
+assert.match(documentXml, /结论摘要/);
+assert.match(documentXml, /方向判断 \+ 保守区间/);
+assert.match(documentXml, /落地方案/);
+assert.match(documentXml, /执行前核验/);
+assert.match(documentXml, /数据依据与风险/);
+assert.match(documentXml, /减轻影响征信方案/);
 assert.match(documentXml, /1,313,868 元/);
 assert.match(documentXml, /5,197 元/);
-assert.match(documentXml, /336 元/);
-assert.match(documentXml, /OCR 与人工复核记录/);
+assert.match(documentXml, /804-1,149 元/);
 assert.match(documentXml, /未复核/);
+assert.match(documentXml, /偏差超过 10%/);
+assert.match(documentXml, /不得以逃废债/);
+assert.doesNotMatch(documentXml, /债务类别/);
 
 const aiFiles = buildDebtAnalysisDocxFiles(report, {
   executiveSummary: '非房贷占比较高，应优先核查经营贷和消费贷的合同与还款节奏。',
@@ -106,9 +109,9 @@ const aiFiles = buildDebtAnalysisDocxFiles(report, {
 });
 
 const aiDocumentXml = strFromU8(aiFiles['word/document.xml']);
-assert.match(aiDocumentXml, /AI 专业分析/);
+assert.match(aiDocumentXml, /补充判断/);
 assert.match(aiDocumentXml, /核查经营贷/);
-assert.match(aiDocumentXml, /近6个月流水/);
+assert.match(aiDocumentXml, /近 6 个月收入流水/);
 
 const reviewFiles = buildDebtAnalysisDocxFiles(report, undefined, {
   reviewedIssueIds: ['账户数量:accountDerived.nonRevolvingLoan.accountCount:1'],
@@ -138,9 +141,7 @@ const reviewFiles = buildDebtAnalysisDocxFiles(report, undefined, {
   ],
 });
 const reviewDocumentXml = strFromU8(reviewFiles['word/document.xml']);
-assert.match(reviewDocumentXml, /OCR 与人工复核记录/);
-assert.match(reviewDocumentXml, /已人工复核/);
-assert.match(reviewDocumentXml, /非循环贷账户数量不一致/);
-assert.match(reviewDocumentXml, /机构库匹配记录/);
-assert.match(reviewDocumentXml, /经机构库匹配/);
-assert.match(reviewDocumentXml, /已采用标准机构名/);
+assert.match(reviewDocumentXml, /数据状态/);
+assert.match(reviewDocumentXml, /未复核字段/);
+assert.match(reviewDocumentXml, /数据依据与风险/);
+assert.doesNotMatch(reviewDocumentXml, /机构库匹配记录/);

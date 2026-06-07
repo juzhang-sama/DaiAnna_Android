@@ -7,9 +7,12 @@
  * 3. 支持统计匹配数量、累加数值等操作
  */
 
-import type { DocParserResult, DocLayout } from '../../shared/doc-parser-types';
+import type { DocParserResult } from '../../shared/doc-parser-types';
 import { getLevel2CreditMap, type Level2CreditSection, type SectionLocation } from './section-locator';
+import { getLayoutLogicalPage } from './reading-order';
 import { debugLog } from '../utils/debug-log';
+
+const ACCOUNT_ANCHOR_RE = /[账帐帳賬]\s*[户戶]\s*([0-9０-９]+)/g;
 
 /** 搜索结果项 */
 export interface SearchHit {
@@ -23,13 +26,6 @@ export interface SearchHit {
   positionX: number;
   /** 物理页码 */
   pageNum: number;
-}
-
-/** 计算逻辑页码 */
-function calcLogicalPage(pageNum: number, posX: number, pageWidth: number): number {
-  const midX = pageWidth / 2;
-  const isRightColumn = posX > midX;
-  return pageNum * 2 + (isRightColumn ? 2 : 1);
 }
 
 /** 判断位置是否在章节范围内 */
@@ -77,13 +73,11 @@ export function searchInSection(
   const regex = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
 
   for (const page of doc.pages) {
-    const pageWidth = page.meta?.page_width ?? 842;
-
     for (const layout of page.layouts) {
       const text = layout.text?.trim() ?? '';
       if (!text) continue;
 
-      const lp = calcLogicalPage(page.page_num, layout.position[0], pageWidth);
+      const lp = getLayoutLogicalPage(page, layout);
       const y = layout.position[1];
 
       if (!isInSection(lp, y, section, nextSection)) continue;
@@ -135,16 +129,47 @@ export function countAccountsInSection(
   const nextSectionType = SECTION_ORDER[currentIndex + 1];
   const nextSection = nextSectionType ? sectionMap.get(nextSectionType) : undefined;
 
-  // 搜索 "账户" + 数字 的模式
-  const hits = searchInSection(doc, section, nextSection, /账户\d+/);
+  const uniqueAccounts = new Set<string>();
 
-  // 去重：同一个账户可能在多个 layout 中出现
-  const uniqueAccounts = new Set(hits.map(h => h.text));
+  for (const page of doc.pages) {
+    for (const layout of page.layouts) {
+      const text = layout.text?.trim() ?? '';
+      if (!text) continue;
+
+      const lp = getLayoutLogicalPage(page, layout);
+      const y = layout.position[1];
+      if (!isInSection(lp, y, section, nextSection)) continue;
+
+      for (const accountNo of extractAccountAnchorNumbers(text)) {
+        uniqueAccounts.add(accountNo);
+      }
+    }
+  }
 
   debugLog(`[countAccountsInSection] ${sectionType}: found ${uniqueAccounts.size} accounts`,
     Array.from(uniqueAccounts).join(', '));
 
   return uniqueAccounts.size;
+}
+
+function extractAccountAnchorNumbers(text: string): string[] {
+  const normalized = normalizeDigits(text);
+  const result: string[] = [];
+  ACCOUNT_ANCHOR_RE.lastIndex = 0;
+
+  for (const match of normalized.matchAll(ACCOUNT_ANCHOR_RE)) {
+    const n = Number(match[1]);
+    if (Number.isFinite(n) && n > 0) {
+      result.push(String(n));
+    }
+  }
+
+  return result;
+}
+
+function normalizeDigits(text: string): string {
+  return text.replace(/[０-９]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
 }
 
 /**

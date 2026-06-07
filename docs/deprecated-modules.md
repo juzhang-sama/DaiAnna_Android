@@ -9,6 +9,17 @@
 - `src/renderer/components/tabs/AccountDetailTab.tsx`：早期账户简表 Tab，当前账户展示集中在 `CreditDetailTab`。
 - `src/renderer/components/tabs/OverdueTab.tsx`：早期逾期/负债概览 Tab，当前由 `CreditAssessmentTab` 和账户明细承担。
 
+## 冷宫模块（暂不接入，保留召回能力）
+
+- 产品匹配功能已从当前产品主线中下线，相关实现暂时保留但不接入主界面：
+  - `src/renderer/components/ProductDrawer.tsx`
+  - `src/renderer/components/ProductForm.tsx`
+  - `src/renderer/components/WeightConfigModal.tsx`
+  - `src/renderer/services/product-matcher.ts`
+  - `src/renderer/services/product-store.ts`
+  - `src/renderer/types/product-rule.ts`
+- 这些文件不应参与当前 OCR、征信评估、债务分析和导出链路的改造。若后续需要“召回”产品匹配，应重新评估产品规则、机构库标准名、征信画像字段和主界面入口，再恢复接入。
+
 ## 当前仍在使用的 OCR 辅助路径
 
 - `src/renderer/services/pdf-to-image.ts`：扫描版 PDF 的 TextIn 原始解析质量不足时，`ocr-service.ts` 会将 PDF 逐页渲染成图片再调用 TextIn，比选“原始 PDF OCR”和“逐页渲染 OCR”的结构质量。

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Descriptions, message, Table, Tag, Typography } from 'antd';
+import { Alert, Button, message, Progress, Table, Tag, Typography } from 'antd';
 import { DownloadOutlined, RobotOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { CreditReport } from '../../types/credit-report';
@@ -12,7 +12,12 @@ import {
   type PaymentReductionPlan,
   type PlanImpactLevel,
 } from '../../services/debt-analysis-report';
-import { exportDebtAnalysisReportToDocx } from '../../services/debt-analysis-docx-export';
+import {
+  buildDebtAnalysisDocxBase64,
+  buildDebtAnalysisDocxFileName,
+  DEBT_ANALYSIS_DOCX_MIME_TYPE,
+  exportDebtAnalysisReportToDocx,
+} from '../../services/debt-analysis-docx-export';
 import {
   getProfessionalDebtAnalysis,
   type LlmDebtAnalysis,
@@ -21,6 +26,7 @@ import {
 } from '../../services/debt-analysis-llm-service';
 import { buildAnalysisReadiness, type AnalysisReadiness } from '../../services/analysis-readiness';
 import { validateCreditReportData } from '../../services/credit-report-validation';
+import { getPlatformAdapters } from '../../platform';
 import type { OcrDiagnosticsReport, OcrReviewState } from '../../types/ocr-diagnostics';
 
 interface DebtAnalysisReportTabProps {
@@ -84,6 +90,7 @@ function renderCalculationList(items: PlanCalculationLine[]): React.ReactNode {
 }
 
 const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, diagnostics, reviewState }) => {
+  const platform = useMemo(() => getPlatformAdapters(), []);
   const analysis = useMemo(() => buildDebtAnalysisReport(report), [report]);
   const validation = useMemo(() => validateCreditReportData(report), [report]);
   const readiness = useMemo(() => buildAnalysisReadiness(validation, reviewState), [reviewState, validation]);
@@ -91,6 +98,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
   const canRunAnalysisActions = canExport && !readiness.blocked;
   const [aiAnalysis, setAiAnalysis] = useState<LlmDebtAnalysis | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [exportingDocx, setExportingDocx] = useState(false);
   const [aiError, setAiError] = useState('');
 
   useEffect(() => {
@@ -98,7 +106,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
     setAiError('');
   }, [report, readiness.blocked]);
 
-  const handleExportDocx = useCallback(() => {
+  const handleExportDocx = useCallback(async () => {
     if (!canExport) {
       message.warning('暂无可导出的分析数据');
       return;
@@ -107,9 +115,30 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
       message.warning(readiness.actionHint);
       return;
     }
-    exportDebtAnalysisReportToDocx(report, undefined, aiAnalysis ?? undefined, reviewState, diagnostics);
-    message.success('分析报告已导出');
-  }, [aiAnalysis, canExport, diagnostics, readiness, report, reviewState]);
+    if (exportingDocx) return;
+
+    setExportingDocx(true);
+    try {
+      const fileName = buildDebtAnalysisDocxFileName(report);
+      if (platform.kind === 'capacitor' && platform.share?.shareFileData) {
+        const base64 = buildDebtAnalysisDocxBase64(report, aiAnalysis ?? undefined, reviewState, diagnostics);
+        await platform.share.shareFileData({
+          fileName,
+          mimeType: DEBT_ANALYSIS_DOCX_MIME_TYPE,
+          base64,
+        });
+        message.success('已打开系统分享');
+      } else {
+        exportDebtAnalysisReportToDocx(report, fileName, aiAnalysis ?? undefined, reviewState, diagnostics);
+        message.success('分析报告已导出');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Word 报告导出失败';
+      message.error(msg);
+    } finally {
+      setExportingDocx(false);
+    }
+  }, [aiAnalysis, canExport, diagnostics, exportingDocx, platform, readiness, report, reviewState]);
 
   const handleAiAnalysis = useCallback(async () => {
     if (!canExport) {
@@ -175,6 +204,22 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
       width: 100,
       align: 'right',
       render: (value: number | null) => formatRatio(value),
+    },
+    {
+      title: '余额结构',
+      key: 'balanceShareBar',
+      width: 170,
+      render: (_, record) => (
+        <div className="flex items-center gap-2">
+          <Progress
+            percent={Math.round((record.balanceShare ?? 0) * 100)}
+            showInfo={false}
+            size="small"
+            strokeColor="#2563eb"
+          />
+          <span className="w-12 text-right text-xs text-slate-500">{formatRatio(record.balanceShare)}</span>
+        </div>
+      ),
     },
   ];
 
@@ -284,147 +329,212 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <Alert
-          className="flex-1"
-          type="info"
-          showIcon
-          title="征信数据分析报告"
-          description="本页基于 OCR 结构化结果生成债务结构、月供压力和方案对比。所有金额以征信原文和机构账单复核为准，方案仅用于现金流分析。"
-        />
-        <Button
-          icon={<RobotOutlined />}
-          onClick={handleAiAnalysis}
-          disabled={!canRunAnalysisActions}
-          loading={aiLoading}
-        >
-          AI 专业分析
-        </Button>
-        <Button
-          type="primary"
-          icon={<DownloadOutlined />}
-          onClick={handleExportDocx}
-          disabled={!canRunAnalysisActions}
-        >
-          导出 Word
-        </Button>
-      </div>
-
-      {canExport && <AnalysisReadinessAlert readiness={readiness} />}
-      {canExport && <AnalysisReviewConfirmedAlert readiness={readiness} reviewState={reviewState} />}
-
-      <Card size="small" title="客户债务总览">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <Metric label="债务总额" value={formatYuan(analysis.debtTotal)} />
-          <Metric label="债务账户" value={`${analysis.debtCount} 笔`} />
-          <Metric label="贷款余额" value={formatYuan(analysis.totalLoanBalance)} />
-          <Metric label="信用卡已用" value={formatYuan(analysis.totalCardUsed)} />
-          <Metric label="当前月供" value={formatYuan(analysis.originalMonthlyPayment)} />
-          <Metric label="非房贷占比" value={formatRatio(analysis.metrics.nonMortgageDebtShare)} />
-          <Metric label="信用卡使用率" value={formatRatio(analysis.metrics.cardUsageRate)} />
-          <Metric label="当前逾期账户" value={`${analysis.metrics.overdueAccountCount} 个`} />
-        </div>
-        <Descriptions size="small" column={2}>
-          <Descriptions.Item label="客户姓名">{analysis.customerName || '-'}</Descriptions.Item>
-          <Descriptions.Item label="报告时间">{analysis.reportTime || '-'}</Descriptions.Item>
-          <Descriptions.Item label="报告编号">{analysis.reportNo || '-'}</Descriptions.Item>
-          <Descriptions.Item label="信用卡总授信">{formatYuan(analysis.totalCardLimit)}</Descriptions.Item>
-        </Descriptions>
-      </Card>
-
-      <Card size="small" title="结构洞察">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {analysis.insights.map((insight) => (
-            <div key={insight.key} className="border border-gray-100 rounded px-3 py-2 bg-gray-50">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <Text strong>{insight.title}</Text>
-                <Tag color={INSIGHT_COLOR[insight.level]}>{insight.level}</Tag>
-              </div>
-              <Paragraph className="mb-2 text-sm">{insight.description}</Paragraph>
-              <div className="text-xs text-gray-500 mb-2">
-                {insight.evidence.map((item) => (
-                  <div key={item}>{item}</div>
-                ))}
-              </div>
-              <div className="text-xs text-blue-600">{insight.suggestion}</div>
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-slate-950">客户债务总览</div>
+            <div className="mt-1 text-sm text-slate-500">
+              所有测算基于征信结构化结果，关键金额需经过复核后再进入报告。
             </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card
-        size="small"
-        title={
-          <div className="flex items-center gap-2">
-            <RobotOutlined />
-            <span>AI 专业建议</span>
           </div>
-        }
-      >
-        {aiError && (
-          <Alert type="error" showIcon title="AI 分析失败" description={aiError} className="mb-3" />
-        )}
-        {aiAnalysis ? (
-          <AiAnalysisContent analysis={aiAnalysis} />
-        ) : (
-          <div className="text-sm text-gray-500">
-            点击“AI 专业分析”后，DeepSeek 会基于上方确定性数据生成综合判断、处理优先级、执行步骤和资料清单。
-          </div>
-        )}
-      </Card>
-
-      <Card size="small" title="债务清单明细">
-        <Table
-          rowKey="key"
-          dataSource={analysis.debtBreakdown}
-          columns={debtColumns}
-          size="small"
-          pagination={false}
-          locale={{ emptyText: '暂未识别到有效债务明细' }}
-        />
-      </Card>
-
-      <Card size="small" title="可分期信用卡清单">
-        <Table
-          rowKey="key"
-          dataSource={analysis.installmentCards}
-          columns={cardColumns}
-          size="small"
-          pagination={false}
-          scroll={{ x: 1100 }}
-          locale={{ emptyText: '暂未识别到有已用额度的信用卡账户' }}
-        />
-      </Card>
-
-      <Card size="small" title="降低月供方案对比">
-        <Table
-          rowKey="key"
-          dataSource={analysis.plans}
-          columns={planColumns}
-          size="small"
-          pagination={false}
-          scroll={{ x: 1600 }}
-        />
-      </Card>
-
-      <Card size="small" title="方案说明与建议">
-        <div className="space-y-3">
-          <div>
-            <Text strong>核心结论</Text>
-            {analysis.summary.map((line) => (
-              <Paragraph key={line} className="mb-1">{line}</Paragraph>
-            ))}
-          </div>
-          <div>
-            <Text strong>风险提示</Text>
-            {analysis.riskNotes.map((line) => (
-              <Paragraph key={line} className="mb-1">{line}</Paragraph>
-            ))}
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <Button
+              icon={<RobotOutlined />}
+              onClick={handleAiAnalysis}
+              disabled={!canRunAnalysisActions}
+              loading={aiLoading}
+            >
+              AI 专业分析
+            </Button>
+            <Button
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={handleExportDocx}
+              disabled={!canRunAnalysisActions}
+              loading={exportingDocx}
+            >
+              导出建议书
+            </Button>
           </div>
         </div>
-      </Card>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <Metric label="债务总额" value={formatYuan(analysis.debtTotal)} tone="blue" />
+          <Metric label="当前月供" value={formatYuan(analysis.originalMonthlyPayment)} tone="green" />
+          <Metric label="本月应还" value={formatYuan(analysis.originalMonthlyPayment)} tone="amber" />
+          <Metric label="信用卡使用率" value={formatRatio(analysis.metrics.cardUsageRate)} tone="purple" />
+          <Metric label="当前逾期账户" value={`${analysis.metrics.overdueAccountCount} 个`} tone="red" />
+          <Metric label="债务账户" value={`${analysis.debtCount} 笔`} />
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <InfoTile label="客户姓名" value={analysis.customerName || '-'} />
+          <InfoTile label="报告时间" value={analysis.reportTime || '-'} />
+          <InfoTile label="报告编号" value={analysis.reportNo || '-'} />
+          <InfoTile label="信用卡总授信" value={formatYuan(analysis.totalCardLimit)} />
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="space-y-4">
+          <Panel title="债务结构">
+            <Table
+              rowKey="key"
+              dataSource={analysis.debtBreakdown}
+              columns={debtColumns}
+              size="small"
+              pagination={false}
+              scroll={{ x: 940 }}
+              locale={{ emptyText: '暂未识别到有效债务明细' }}
+            />
+          </Panel>
+
+          <Panel title="可分期信用卡清单">
+            <Table
+              rowKey="key"
+              dataSource={analysis.installmentCards}
+              columns={cardColumns}
+              size="small"
+              pagination={false}
+              scroll={{ x: 1100 }}
+              locale={{ emptyText: '暂未识别到有已用额度的信用卡账户' }}
+            />
+          </Panel>
+
+          <Panel title="降低月供方案对比">
+            <Table
+              rowKey="key"
+              dataSource={analysis.plans}
+              columns={planColumns}
+              size="small"
+              pagination={false}
+              scroll={{ x: 1600 }}
+            />
+          </Panel>
+        </main>
+
+        <aside className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+          <Panel title="结构洞察">
+            <div className="space-y-3">
+              {analysis.insights.map((insight) => (
+                <InsightCard key={insight.key} insight={insight} />
+              ))}
+            </div>
+          </Panel>
+
+          <Panel title="OCR 复核状态">
+            {canExport ? (
+              <ReadinessSummary readiness={readiness} reviewState={reviewState} />
+            ) : (
+              <div className="text-sm text-slate-500">暂无可用于分析的征信数据。</div>
+            )}
+          </Panel>
+
+          <Panel title="AI 建议状态">
+            {aiError && (
+              <Alert type="error" showIcon title="AI 分析失败" description={aiError} className="mb-3" />
+            )}
+            {aiAnalysis ? (
+              <AiAnalysisContent analysis={aiAnalysis} />
+            ) : (
+              <div className="space-y-2 text-sm text-slate-500">
+                <div>AI 建议尚未生成。</div>
+                <Button
+                  block
+                  icon={<RobotOutlined />}
+                  onClick={handleAiAnalysis}
+                  disabled={!canRunAnalysisActions}
+                  loading={aiLoading}
+                >
+                  生成专业分析
+                </Button>
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="下一步建议">
+            <div className="space-y-2">
+              {analysis.summary.slice(0, 2).map((line) => (
+                <div key={line} className="text-sm leading-6 text-slate-700">{line}</div>
+              ))}
+              {analysis.riskNotes.slice(0, 2).map((line) => (
+                <div key={line} className="rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">{line}</div>
+              ))}
+            </div>
+          </Panel>
+        </aside>
+      </div>
     </div>
   );
+};
+
+const Panel: React.FC<{
+  title: string;
+  children: React.ReactNode;
+}> = ({ title, children }) => (
+  <section className="rounded-lg border border-slate-200 bg-white">
+    <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-950">
+      {title}
+    </div>
+    <div className="p-3">{children}</div>
+  </section>
+);
+
+const InsightCard: React.FC<{ insight: AnalysisInsight }> = ({ insight }) => (
+  <div className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+    <div className="flex items-start justify-between gap-2">
+      <div className="text-sm font-medium text-slate-900">{insight.title}</div>
+      <Tag color={INSIGHT_COLOR[insight.level]}>{insight.level}</Tag>
+    </div>
+    <div className="mt-2 text-xs leading-5 text-slate-600">{insight.description}</div>
+    <div className="mt-2 space-y-1 text-xs text-slate-500">
+      {insight.evidence.map((item) => <div key={item}>{item}</div>)}
+    </div>
+    <div className="mt-2 text-xs leading-5 text-blue-600">{insight.suggestion}</div>
+  </div>
+);
+
+const ReadinessSummary: React.FC<{
+  readiness: AnalysisReadiness;
+  reviewState?: OcrReviewState;
+}> = ({ readiness, reviewState }) => {
+  if (readiness.blocked) {
+    return (
+      <div className="space-y-3">
+        <Alert
+          type={readiness.alertType}
+          showIcon
+          title={readiness.reason}
+          description={readiness.actionHint}
+        />
+        <div className="space-y-2">
+          {readiness.displayIssues.map((issue) => (
+            <div key={issue.id} className="rounded-md bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+              <span className="font-medium">{issue.category}</span>：{issue.message}
+            </div>
+          ))}
+          {readiness.hiddenIssueCount > 0 && (
+            <div className="text-xs text-slate-500">另有 {readiness.hiddenIssueCount} 项需复核。</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (readiness.reviewedIssueCount > 0) {
+    return (
+      <Alert
+        type="success"
+        showIcon
+        title="复核已确认"
+        description={`已人工复核 ${readiness.reviewedIssueCount} 项${
+          reviewState?.reviewedAt ? `，${formatReviewTime(reviewState.reviewedAt)}` : ''
+        }。`}
+      />
+    );
+  }
+
+  return <Alert type="success" showIcon title="当前未阻断分析" description="可继续生成 AI 分析或导出报告。" />;
 };
 
 const AnalysisReadinessAlert: React.FC<{ readiness: AnalysisReadiness }> = ({ readiness }) => {
@@ -565,10 +675,30 @@ const CompactList: React.FC<{ title: string; items: string[] }> = ({ title, item
   </div>
 );
 
-const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="border border-gray-100 rounded px-3 py-2 bg-gray-50">
-    <div className="text-xs text-gray-500 mb-1">{label}</div>
-    <div className="text-base font-semibold text-gray-900">{value}</div>
+const METRIC_TONE: Record<string, string> = {
+  blue: 'bg-blue-50 text-blue-700 ring-blue-100',
+  green: 'bg-emerald-50 text-emerald-700 ring-emerald-100',
+  amber: 'bg-amber-50 text-amber-700 ring-amber-100',
+  purple: 'bg-violet-50 text-violet-700 ring-violet-100',
+  red: 'bg-red-50 text-red-700 ring-red-100',
+  slate: 'bg-slate-50 text-slate-700 ring-slate-100',
+};
+
+const Metric: React.FC<{ label: string; value: string; tone?: keyof typeof METRIC_TONE }> = ({
+  label,
+  value,
+  tone = 'slate',
+}) => (
+  <div className={`rounded-lg px-3 py-3 ring-1 ${METRIC_TONE[tone]}`}>
+    <div className="text-xs opacity-75">{label}</div>
+    <div className="mt-1 text-lg font-semibold">{value}</div>
+  </div>
+);
+
+const InfoTile: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="min-w-0 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+    <div className="text-xs text-slate-500">{label}</div>
+    <div className="mt-1 min-w-0 break-words text-sm font-medium leading-5 text-slate-900">{value}</div>
   </div>
 );
 

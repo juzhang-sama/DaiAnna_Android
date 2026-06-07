@@ -5,6 +5,7 @@
  */
 
 import type { ContextTable } from '../doc-table-bridge';
+import type { ParsedTable } from '../markdown-table-parser';
 import type { RepaymentRecord } from '../../types/credit-report';
 
 /** 取一组内第一个非空值 */
@@ -19,7 +20,7 @@ export function getGroupValue(row: string[], groupStart: number, groupSize: numb
 /** 在标签行中模糊匹配关键词，返回所在组的起始索引 */
 export function findLabelGroup(labelRow: string[], keyword: string, groupSize: number): number {
   for (let i = 0; i < labelRow.length; i++) {
-    if (labelRow[i]?.includes(keyword)) {
+    if (matchesLabel(labelRow[i] ?? '', keyword)) {
       return Math.floor(i / groupSize) * groupSize;
     }
   }
@@ -33,6 +34,203 @@ export function getLabeledValue(
   const group = findLabelGroup(labelRow, keyword, groupSize);
   if (group < 0) return '';
   return getGroupValue(valueRow, group, groupSize);
+}
+
+function matchesLabel(cell: string, keyword: string): boolean {
+  if (!cell) return false;
+
+  const value = normalizeLabelCell(cell);
+  const target = normalizeLabelCell(keyword);
+  if (!value || !target) return false;
+  if (hasConflictingLabelMeaning(value, target)) return false;
+  if (value.includes(target)) return true;
+  if (target.includes(value) && target.length - value.length <= 1 && value.length >= Math.min(3, target.length)) {
+    return true;
+  }
+
+  if (target === '管理机构' && value.includes('查询机构')) return false;
+  if (target.length <= 2) return false;
+
+  return labelSimilarity(value, target) >= similarityThreshold(target);
+}
+
+function hasConflictingLabelMeaning(value: string, target: string): boolean {
+  const exclusivePairs: Array<[string, string]> = [
+    ['证件类型', '证件号码'],
+    ['开立日期', '到期日期'],
+    ['本月应还款', '本月实还款'],
+    ['查询机构', '管理机构'],
+  ];
+
+  return exclusivePairs.some(([left, right]) =>
+    (value.includes(left) && target.includes(right)) ||
+    (value.includes(right) && target.includes(left)),
+  );
+}
+
+function normalizeLabelCell(value: string): string {
+  return value
+    .replace(/\s+/g, '')
+    .replace(/[■□�]/g, '')
+    .replace(/[：:()（）]/g, '')
+    .replace(/僧款/g, '借款')
+    .replace(/管利/g, '管理')
+    .replace(/管机/g, '管理机')
+    .replace(/到日期/g, '到期日期')
+    .replace(/期日期/g, '到期日期')
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '');
+}
+
+function labelSimilarity(value: string, target: string): number {
+  const lcs = longestCommonSubsequence(value, target);
+  return lcs / Math.max(value.length, target.length);
+}
+
+function similarityThreshold(target: string): number {
+  if (target.length <= 4) return 0.74;
+  if (target.length <= 6) return 0.68;
+  return 0.62;
+}
+
+function longestCommonSubsequence(a: string, b: string): number {
+  const prev = new Array(b.length + 1).fill(0);
+  const curr = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    curr.fill(0);
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], curr[j - 1]);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+export type TableValueKind = 'text' | 'amount' | 'date';
+
+/**
+ * 在整张账户表中按标签找值。
+ *
+ * TextIn 表格常见形态不是固定的 row[4]/row[5]：
+ * - 标签在 headers，值在第一行；
+ * - 标签和值上下两行；
+ * - 合并单元格导致标签重复填充；
+ * - OCR 把标签和值粘在同一个单元格。
+ */
+export function findTableValueByLabels(
+  table: ParsedTable,
+  labels: string | string[],
+  kind: TableValueKind = 'text',
+): string {
+  return findValueByLabelsInRows([table.headers, ...table.rows], labels, kind);
+}
+
+export function findValueByLabelsInRows(
+  allRows: string[][],
+  labels: string | string[],
+  kind: TableValueKind = 'text',
+): string {
+  const labelList = Array.isArray(labels) ? labels : [labels];
+  for (let rowIdx = 0; rowIdx < allRows.length; rowIdx++) {
+    const row = allRows[rowIdx] ?? [];
+    for (let colIdx = 0; colIdx < row.length; colIdx++) {
+      const cell = row[colIdx] ?? '';
+      if (!labelList.some((label) => matchesLabel(cell, label))) continue;
+
+      const candidates = collectValueCandidates(allRows, rowIdx, colIdx, labelList);
+      for (const candidate of candidates) {
+        const value = normalizeTableCandidate(candidate, labelList, kind);
+        if (value) return value;
+      }
+    }
+  }
+  return '';
+}
+
+function collectValueCandidates(
+  allRows: string[][],
+  rowIdx: number,
+  colIdx: number,
+  labels: string[],
+): string[] {
+  const row = allRows[rowIdx] ?? [];
+  const nextRow = allRows[rowIdx + 1] ?? [];
+  const candidates: string[] = [];
+
+  candidates.push(extractInlineValue(row[colIdx] ?? '', labels));
+  candidates.push(row[colIdx + 1] ?? '');
+  candidates.push(row[colIdx + 2] ?? '');
+
+  for (let offset = 0; offset <= 2; offset++) {
+    candidates.push(nextRow[colIdx + offset] ?? '');
+  }
+
+  return candidates;
+}
+
+function extractInlineValue(cell: string, labels: string[]): string {
+  for (const label of labels) {
+    const idx = cell.indexOf(label);
+    if (idx < 0) continue;
+    const after = cell.slice(idx + label.length).replace(/^[：:\s\-]+/, '').trim();
+    if (after) return after;
+  }
+  return '';
+}
+
+function normalizeTableCandidate(raw: string, labels: string[], kind: TableValueKind): string {
+  if (!raw) return '';
+  for (const line of splitLines(raw)) {
+    const inline = extractInlineValue(line, labels);
+    const candidate = inline || line.trim();
+    if (!candidate) continue;
+    if (labels.some((label) => candidate === label || candidate.includes(label))) continue;
+
+    if (kind === 'amount') {
+      if (isLabelLike(candidate)) continue;
+      const amount = extractAmountCandidate(candidate);
+      if (amount) return amount;
+      continue;
+    }
+    if (kind === 'date') {
+      const date = extractDateCandidate(candidate);
+      if (date) return date;
+      continue;
+    }
+    if (!isLabelLike(candidate)) return candidate;
+  }
+  return '';
+}
+
+function extractAmountCandidate(raw: string): string {
+  const text = raw.trim().replace(/[￥¥元]/g, '');
+  if (!text || looksLikeDate(text)) return '';
+  if (/^[-—－]+$/.test(text)) return '0';
+  const match = text.match(/-?\d[\d,.]*/);
+  if (!match) return '';
+  const value = match[0];
+  if (looksLikeDate(value)) return '';
+  return value;
+}
+
+function extractDateCandidate(raw: string): string {
+  const text = raw.trim();
+  const date = text.match(/\d{4}[.\-/年]\d{1,2}[.\-/月]\d{1,2}日?/);
+  if (date) return date[0].replace(/年|月/g, '.').replace(/日/g, '');
+  const day = text.match(/^(?:[1-9]|[12]\d|3[01])$/);
+  return day?.[0] ?? '';
+}
+
+function looksLikeDate(value: string): boolean {
+  return /\d{4}[.\-/年]\d{1,2}[.\-/月]\d{1,2}日?/.test(value) ||
+    /\d{4}\s*年/.test(value);
+}
+
+function isLabelLike(value: string): boolean {
+  const isNumeric = /^[-—－\d,.\s￥¥元]+$/.test(value);
+  if (isNumeric) return false;
+  return /机构|种类|方式|状态|额度|余额|日期|还款|期数|分类|币种|账户|金额|借款|利率|标识|合同|到期|开立|证件|编号|授信|账单/.test(value);
 }
 
 /** 解析数字，先清洗换行粘连再去除千分位分隔符 */
@@ -53,7 +251,7 @@ export function isContinuationTable(ct: ContextTable, sectionPrefix: RegExp): bo
 
 /** 判断表格是否有标准贷管理机构） */
 export function hasLoanHeader(ct: ContextTable): boolean {
-  return ct.table.headers.some(h => h.includes('管理机构'));
+  return findLabelGroup(ct.table.headers, '管理机构', 1) >= 0;
 }
 
 /**
@@ -79,6 +277,92 @@ export function tryMergeSplitTable(
     table: { headers: ct.table.headers, rows: allRows },
   };
   return { merged, skip: 2 };
+}
+
+/**
+ * 将同一账户段内的表格片段合并为一个解析视图。
+ *
+ * 账户边界由 doc-table-bridge 根据“类别标题 + 账户N + 阅读顺序”确定；
+ * 到这里时，同段内的表格都应视为同一账户的字段来源。合并时优先横向拼接
+ * 行数一致的左右半表，其余片段按阅读顺序追加，方便按标签全表搜索。
+ */
+export function mergeSegmentTablesForParsing(tables: ContextTable[]): ContextTable | null {
+  if (tables.length === 0) return null;
+  let current = cloneContextTable(tables[0]);
+
+  for (const next of tables.slice(1)) {
+    current = canMergeHorizontally(current.table, next.table)
+      ? mergeContextTables(current, next, mergeParsedTablesHorizontally(current.table, next.table), 'horizontal')
+      : mergeContextTables(current, next, mergeParsedTablesVertically(current.table, next.table), 'vertical');
+  }
+
+  return current;
+}
+
+function cloneContextTable(table: ContextTable): ContextTable {
+  return {
+    ...table,
+    table: {
+      headers: [...table.table.headers],
+      rows: table.table.rows.map((row) => [...row]),
+    },
+  };
+}
+
+function canMergeHorizontally(a: ParsedTable, b: ParsedTable): boolean {
+  const aRows = [a.headers, ...a.rows];
+  const bRows = [b.headers, ...b.rows];
+  if (aRows.length < 2 || aRows.length !== bRows.length) return false;
+  if (normalizeHeaderRow(a.headers) === normalizeHeaderRow(b.headers)) return false;
+  return true;
+}
+
+function mergeParsedTablesHorizontally(a: ParsedTable, b: ParsedTable): ParsedTable {
+  const aRows = [a.headers, ...a.rows];
+  const bRows = [b.headers, ...b.rows];
+  const mergedRows = aRows.map((row, index) => [...row, ...(bRows[index] ?? [])]);
+  return {
+    headers: mergedRows[0] ?? [],
+    rows: mergedRows.slice(1),
+  };
+}
+
+function mergeParsedTablesVertically(a: ParsedTable, b: ParsedTable): ParsedTable {
+  const rowsToAppend = normalizeHeaderRow(a.headers) === normalizeHeaderRow(b.headers)
+    ? b.rows
+    : [b.headers, ...b.rows];
+  return {
+    headers: a.headers,
+    rows: [...a.rows, ...rowsToAppend],
+  };
+}
+
+function mergeContextTables(
+  base: ContextTable,
+  next: ContextTable,
+  table: ParsedTable,
+  strategy: 'horizontal' | 'vertical',
+): ContextTable {
+  return {
+    ...base,
+    table,
+    markdown: tableToMarkdown(table),
+    precedingText: base.precedingText || next.precedingText,
+    fragmentCount: (base.fragmentCount ?? 1) + (next.fragmentCount ?? 1),
+    fragmentMergeStrategy: strategy,
+  };
+}
+
+function normalizeHeaderRow(row: string[]): string {
+  return row.map((cell) => cell.replace(/\s+/g, '')).join('|');
+}
+
+function tableToMarkdown(table: ParsedTable): string {
+  const separator = table.headers.map(() => '---');
+  return [table.headers, separator, ...table.rows]
+    .filter((row) => row.length > 0)
+    .map((row) => `| ${row.join(' | ')} |`)
+    .join('\n');
 }
 
 // ── OCR 粘连清洗函数 ──

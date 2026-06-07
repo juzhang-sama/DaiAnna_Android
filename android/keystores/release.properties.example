@@ -1,0 +1,4 @@
+storeFile=keystores/release.keystore
+storePassword=replace-with-store-password
+keyAlias=loan-intelligence
+keyPassword=replace-with-key-password

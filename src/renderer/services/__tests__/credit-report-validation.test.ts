@@ -75,6 +75,9 @@ report.header.reportTime = '2026.06.01';
 report.creditDetail.nonRevolvingLoans = [
   makeLoan({ loanAmount: 100000, balance: 150000, monthlyPayment: 0 }),
 ];
+report.creditDetail.revolvingLoansType1 = [
+  makeLoan({ org: '月供异常银行', loanAmount: 10000, balance: 787, monthlyPayment: 2713 }),
+];
 report.creditDetail.creditCards = [
   makeCard({ creditLimit: 10000, usedAmount: 20000 }),
 ];
@@ -91,5 +94,6 @@ const validation = validateCreditReportData(report);
 assert.equal(validation.requiresReview, true);
 assert.equal(validation.summary.critical >= 2, true);
 assert.equal(validation.issues.some((issue) => issue.message.includes('余额大于借款金额')), true);
+assert.equal(validation.issues.some((issue) => issue.message.includes('本月应还异常高')), true);
 assert.equal(validation.issues.some((issue) => issue.message.includes('已用额度大于授信额度')), true);
 assert.equal(validation.issues.some((issue) => issue.message.includes('数量不一致')), true);

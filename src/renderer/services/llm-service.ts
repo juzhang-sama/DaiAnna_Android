@@ -6,6 +6,7 @@
  */
 
 import type { CreditProfile } from '../types/credit-profile';
+import { getPlatformAdapters } from '../platform';
 import type { AssessmentResult } from './credit-assessment';
 
 /** LLM 结构化点评结果 */
@@ -137,6 +138,6 @@ export async function getLLMComments(
     { role: 'user', content: buildAnalysisPrompt(profile, assessment) },
   ];
 
-  const raw = await window.electron.llmChat(messages);
+  const raw = await getPlatformAdapters().llmClient.chat(messages);
   return parseLLMJson(raw);
 }

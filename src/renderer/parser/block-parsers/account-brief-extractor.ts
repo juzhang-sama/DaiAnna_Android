@@ -6,8 +6,8 @@
 
 import type { AccountBrief } from '../../types/credit-report';
 import type { ContextTable } from '../doc-table-bridge';
-import { groupAccountTables, type AccountCategory } from '../doc-table-bridge';
-import { getRowValues } from '../markdown-table-parser';
+import { groupAccountTables, isAccountSummaryTable, type AccountCategory } from '../doc-table-bridge';
+import { findTableValueByLabels } from './loan-table-utils';
 
 /** 类别中文标签映射 */
 const CATEGORY_LABELS: Record<AccountCategory, string> = {
@@ -32,6 +32,7 @@ export function extractAccountBriefs(docTables: ContextTable[]): AccountBrief[] 
     const label = CATEGORY_LABELS[category];
 
     for (const ct of tables) {
+      if (isAccountSummaryTable(ct)) continue;
       briefs.push(extractBriefFromTable(ct, category, label, isCard));
     }
   }
@@ -45,22 +46,19 @@ function extractBriefFromTable(
 ): AccountBrief {
   const t = ct.table;
 
-  const orgVals = getRowValues(t, isCreditCard ? '发卡机构' : '管理机构');
-  const org = orgVals[0]?.trim() ?? '';
-
-  const openDateVals = getRowValues(t, '开立日期');
-  const openDate = openDateVals[0]?.trim() ?? '';
-
-  const statusVals = getRowValues(t, '账户状态');
-  const status = statusVals[0]?.trim() ?? '';
-  const isClosed = statusVals.some((s) => /结清|销户/.test(s));
+  const org = findTableValueByLabels(t, isCreditCard ? '发卡机构' : '管理机构');
+  const openDate = findTableValueByLabels(t, '开立日期', 'date');
+  const status = findTableValueByLabels(t, '账户状态');
+  const isClosed = /结清|销户/.test(status);
 
   const creditLabel = isCreditCard ? '授信额度' : '借款金额';
   const balanceLabel = isCreditCard ? '已用额度' : '余额';
 
-  const creditAmount = parseDocNum(getRowValues(t, creditLabel)[0]);
-  const balance = parseDocNum(getRowValues(t, balanceLabel)[0]);
-  const monthlyPayment = isClosed ? 0 : parseDocNum(getRowValues(t, '本月应还款')[0]);
+  const creditAmount = parseDocNum(findTableValueByLabels(t, creditLabel, 'amount'));
+  const balance = parseDocNum(findTableValueByLabels(t, balanceLabel, 'amount'));
+  const monthlyPayment = isClosed ? 0 : parseDocNum(
+    findTableValueByLabels(t, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount'),
+  );
 
   return {
     category, categoryLabel, org, openDate,
@@ -71,8 +69,10 @@ function extractBriefFromTable(
 /** 解析文档解析返回的数值字符串 */
 function parseDocNum(val: string | undefined): number {
   if (!val) return 0;
-  const cleaned = val.trim().replace(/,/g, '').replace(/--/g, '0');
+  const cleaned = val.trim()
+    .replace(/,/g, '')
+    .replace(/--/g, '0')
+    .replace(/\.(\d{3})(?!\d)/g, '$1');
   const num = parseFloat(cleaned);
   return isNaN(num) ? 0 : num;
 }
-

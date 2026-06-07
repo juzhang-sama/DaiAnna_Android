@@ -7,6 +7,7 @@
  */
 
 import type { DocParserResult } from '../../shared/doc-parser-types';
+import { getLayoutLogicalPage } from './reading-order';
 import { debugLog } from '../utils/debug-log';
 
 /** 章节位置信息 */
@@ -73,13 +74,6 @@ const L1_SECTION_ORDER: Level1Section[] = [
   'queryRecord', 'selfQueryDetail', 'reportNote', 'editNote',
 ];
 
-/** 计算逻辑页码 */
-function calcLogicalPage(pageNum: number, posX: number, pageWidth: number): number {
-  const midX = pageWidth / 2;
-  const isRightColumn = posX > midX;
-  return pageNum * 2 + (isRightColumn ? 2 : 1);
-}
-
 /** 扫描结果缓存 */
 let cachedLevel1Map: Map<Level1Section, SectionLocation> | null = null;
 let cachedLevel2CreditMap: Map<Level2CreditSection, SectionLocation> | null = null;
@@ -91,17 +85,15 @@ export function scanLevel1Sections(doc: DocParserResult): Map<Level1Section, Sec
   const found: Array<{ type: Level1Section; name: string; lp: number; y: number }> = [];
 
   for (const page of doc.pages) {
-    const pageWidth = page.meta?.page_width ?? 842;
-
     for (const layout of page.layouts) {
       if (layout.type === 'table') continue;
       const text = layout.text?.trim() ?? '';
       if (!text) continue;
 
       for (const { pattern, type } of LEVEL1_KEYWORDS) {
-        if (pattern.test(text) && !found.some((f) => f.type === type)) {
-          const lp = calcLogicalPage(page.page_num, layout.position[0], pageWidth);
-          found.push({ type, name: text.slice(0, 20), lp, y: layout.position[1] });
+        if (pattern.test(text)) {
+          const lp = getLayoutLogicalPage(page, layout);
+          upsertEarliestSection(found, { type, name: text.slice(0, 20), lp, y: layout.position[1] });
           break;
         }
       }
@@ -153,17 +145,15 @@ export function scanLevel2CreditSections(doc: DocParserResult): Map<Level2Credit
   const found: Array<{ type: Level2CreditSection; name: string; lp: number; y: number }> = [];
 
   for (const page of doc.pages) {
-    const pageWidth = page.meta?.page_width ?? 842;
-
     for (const layout of page.layouts) {
       if (layout.type === 'table') continue;
       const text = layout.text?.trim() ?? '';
       if (!text) continue;
 
       for (const { pattern, type } of LEVEL2_CREDIT_KEYWORDS) {
-        if (pattern.test(text) && !found.some((f) => f.type === type)) {
-          const lp = calcLogicalPage(page.page_num, layout.position[0], pageWidth);
-          found.push({ type, name: text.slice(0, 20), lp, y: layout.position[1] });
+        if (pattern.test(text)) {
+          const lp = getLayoutLogicalPage(page, layout);
+          upsertEarliestSection(found, { type, name: text.slice(0, 20), lp, y: layout.position[1] });
           break;
         }
       }
@@ -199,4 +189,20 @@ export function getLevel1Map(): Map<Level1Section, SectionLocation> {
 /** 获取缓存的二级模块映射（信贷交易信息明细下） */
 export function getLevel2CreditMap(): Map<Level2CreditSection, SectionLocation> {
   return cachedLevel2CreditMap ?? new Map();
+}
+
+function upsertEarliestSection<T extends string>(
+  found: Array<{ type: T; name: string; lp: number; y: number }>,
+  next: { type: T; name: string; lp: number; y: number },
+): void {
+  const existingIndex = found.findIndex((item) => item.type === next.type);
+  if (existingIndex < 0) {
+    found.push(next);
+    return;
+  }
+
+  const existing = found[existingIndex];
+  if (next.lp < existing.lp || (next.lp === existing.lp && next.y < existing.y)) {
+    found[existingIndex] = next;
+  }
 }

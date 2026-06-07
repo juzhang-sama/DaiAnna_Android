@@ -6,12 +6,13 @@ import { parseDocument } from './textin-document-parser';
 import { correctOcrText, correctDocResult } from '../parser/ocr-corrector';
 import { reorderPages, reorderDocPages } from '../parser/page-reorder';
 import { evaluateOcrQuality } from '../parser/ocr-quality';
-import { DEBUG_ENABLED, debugLog } from '../utils/debug-log';
+import { debugLog } from '../utils/debug-log';
 import { mergeDocParserResults } from './doc-parser-merge';
 import { preprocessImage, type PreprocessOptions } from './image-preprocess';
 import { evaluateImageQuality } from './image-quality';
 import { validateCreditReportData } from './credit-report-validation';
 import { normalizeCreditReportInstitutions } from './institution-normalizer';
+import { fuseDocParserCandidateTables } from './doc-parser-candidate-fusion';
 import { pdfToImages } from './pdf-to-image';
 import type { CreditReport } from '../types/credit-report';
 import type {
@@ -321,13 +322,8 @@ async function analyzeSingleCreditReport(file: File): Promise<OcrResult> {
   const quality = docResult ? evaluateOcrQuality(docResult) : undefined;
   logQuality(quality);
 
-  const { profile, confidence, report: parsedReport, debugBlockMap } = parseCreditReport(fullText, undefined, docResult);
+  const { profile, confidence, report: parsedReport } = parseCreditReport(fullText, undefined, docResult);
   const { report, corrections } = normalizeCreditReportInstitutions(parsedReport);
-  if (DEBUG_ENABLED && debugBlockMap) {
-    debugLog('[Debug] blockMap.level1:', JSON.stringify(debugBlockMap.level1));
-    debugLog('[Debug] blockMap.level2:', JSON.stringify(debugBlockMap.level2));
-    debugLog('[Debug] blockMap.accounts count:', debugBlockMap.accounts?.length);
-  }
   return {
     profile,
     confidence,
@@ -352,13 +348,8 @@ async function analyzeImageSetCreditReport(files: File[]): Promise<OcrResult> {
   const quality = evaluateOcrQuality(docResult);
   logQuality(quality);
 
-  const { profile, confidence, report: parsedReport, debugBlockMap } = parseCreditReport(fullText, undefined, docResult);
+  const { profile, confidence, report: parsedReport } = parseCreditReport(fullText, undefined, docResult);
   const { report, corrections } = normalizeCreditReportInstitutions(parsedReport);
-  if (DEBUG_ENABLED && debugBlockMap) {
-    debugLog('[Debug] blockMap.level1:', JSON.stringify(debugBlockMap.level1));
-    debugLog('[Debug] blockMap.level2:', JSON.stringify(debugBlockMap.level2));
-    debugLog('[Debug] blockMap.accounts count:', debugBlockMap.accounts?.length);
-  }
   return {
     profile,
     confidence,
@@ -417,8 +408,13 @@ async function analyzeBase64ViaOcrCandidates(
     issues: item.quality.issues,
   }));
 
+  const fusedDocResult = fuseDocParserCandidateTables(
+    best.docResult,
+    parsed.map((item) => item.docResult),
+  );
+
   return {
-    docResult: best.docResult,
+    docResult: fusedDocResult,
     candidates: diagnostics,
   };
 }
@@ -551,9 +547,7 @@ function rankCandidate(quality: ReturnType<typeof evaluateOcrQuality>): number {
 
 async function parseViaOcr(file: File): Promise<DocParserResult> {
   const base64 = await fileToBase64(file);
-  const docResult = await parseDocument(base64, file.name || 'document');
-  debugLog('[DocParser] pages count:', docResult.pages?.length ?? 'undefined');
-  return docResult;
+  return parseDocument(base64, file.name || 'document');
 }
 
 function normalizeOcrDocResult(docResult: DocParserResult): DocParserResult {
@@ -562,90 +556,11 @@ function normalizeOcrDocResult(docResult: DocParserResult): DocParserResult {
   docResult.pages.forEach((p, i) => { p.page_num = i; });
 
   correctDocResult(docResult);
-  debugLog('[OcrCorrector] docResult corrected');
 
-  if (DEBUG_ENABLED) debugPageStructure(docResult);
   return docResult;
 }
 
 function buildMultiImageFileName(files: File[]): string {
   const first = files[0]?.name?.replace(/\.[^.]+$/, '') || 'multi-image-credit-report';
   return `${first}_等${files.length}张图片`;
-}
-
-/**
- * 调试：打印页面结构信息
- * - 页脚内容（验证逻辑页码 vs 物理页码）
- * - 章节标题的 position.x 和 page_num（验证左右栏）
- */
-function debugPageStructure(doc: DocParserResult): void {
-  debugLog('\n========== [Debug] 页面结构分析 ==========');
-
-  // 打印所有物理页码，检查是否有遗漏
-  const pageNums = doc.pages.map((p) => p.page_num);
-  debugLog(`[Debug] 物理页码列表 (共${doc.pages.length}页):`, pageNums.join(', '));
-
-  // 打印物理页 → 逻辑页对照表（从页脚提取）
-  const pageFooterPattern = /第(\d+)页[，,。./\s]*共(\d+)页/;
-  const pageMapping: string[] = [];
-  for (const page of doc.pages) {
-    let footerText = '';
-    for (const l of page.layouts) {
-      if (pageFooterPattern.test(l.text ?? '')) {
-        footerText = l.text!;
-        break;
-      }
-      if (l.type === 'head_tail') {
-        footerText = footerText || l.text || '';
-      }
-    }
-    const m = footerText.match(pageFooterPattern);
-    const lp = m ? `逻辑页${m[1]}/${m[2]}` : `无页脚(${footerText.slice(0, 20)})`;
-    pageMapping.push(`物理${page.page_num}→${lp}`);
-  }
-  debugLog(`[Debug] 页码对照:`, pageMapping.join(' | '));
-
-  // 打印前两页的全部 layouts（用于排查页脚识别问题）
-  for (const page of doc.pages.slice(0, 2)) {
-    const pn = page.page_num;
-    debugLog(`[Debug] --- 物理页${pn} layouts(${page.layouts.length}) ---`);
-    for (let i = 0; i < page.layouts.length; i++) {
-      const l = page.layouts[i];
-      const sub = l.sub_type ? ` sub=${l.sub_type}` : '';
-      debugLog(
-        `[Debug] 页${pn} [${i}] type=${l.type}${sub} x=${l.position[0]} y=${l.position[1]} text="${l.text?.slice(0, 80) ?? ''}"`,
-      );
-    }
-  }
-
-  const sectionKeywords = ['非循环贷账户', '循环贷账户一', '循环贷账户二', '贷记卡账户', '四查询记录', '四 查询记录'];
-  const accountPattern = /^账户\d+/;
-
-  for (const page of doc.pages) {
-    const pageWidth = page.meta?.page_width ?? 0;
-    const midX = pageWidth / 2;
-
-    // 找页脚
-    const footers = page.layouts.filter(
-      (l) => l.type === 'head_tail' && (l.sub_type === 'footer' || /第\d+页/.test(l.text))
-    );
-    for (const f of footers) {
-      const side = f.position[0] < midX ? '左栏' : '右栏';
-        debugLog(`[Footer] 物理页${page.page_num} ${side} x=${f.position[0]}: "${f.text}"`);
-    }
-
-    // 找章节标题
-    for (const layout of page.layouts) {
-      const text = layout.text?.trim() ?? '';
-      const isSection = sectionKeywords.some((kw) => text.includes(kw));
-      const isAccount = accountPattern.test(text);
-
-      if (isSection || isAccount) {
-        const side = layout.position[0] < midX ? '左栏' : '右栏';
-        debugLog(`[Section] 物理页${page.page_num} ${side} x=${layout.position[0]}: "${text}"`);
-      }
-    }
-  }
-
-  debugLog('========== [Debug] 页面结构分析结束 ==========\n');
 }

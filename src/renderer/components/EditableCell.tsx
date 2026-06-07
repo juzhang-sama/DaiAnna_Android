@@ -7,13 +7,17 @@ interface EditableCellProps {
   onChange: (val: any) => void;
   placeholder?: string;
   formatter?: (val: number) => string;
+  reviewFieldId?: string;
+  reviewFocused?: boolean;
+  reviewFocusToken?: number;
 }
 
 const EditableCell: React.FC<EditableCellProps> = ({
-  value, type, onChange, placeholder = '-', formatter,
+  value, type, onChange, placeholder = '-', formatter, reviewFieldId, reviewFocused = false, reviewFocusToken,
 }) => {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<any>(null);
+  const lastFocusTokenRef = useRef<number | undefined>(undefined);
 
   const resolvedType = type ?? (typeof value === 'number' ? 'number' : 'string');
 
@@ -23,34 +27,44 @@ const EditableCell: React.FC<EditableCellProps> = ({
     }
   }, [editing]);
 
+  useEffect(() => {
+    if (!reviewFocused || !reviewFocusToken || lastFocusTokenRef.current === reviewFocusToken) return;
+    lastFocusTokenRef.current = reviewFocusToken;
+    setEditing(true);
+  }, [reviewFocused, reviewFocusToken]);
+
   const handleBlur = () => setEditing(false);
 
   if (editing) {
     if (resolvedType === 'number') {
       return (
-        <InputNumber
-          ref={inputRef}
-          size="small"
-          value={typeof value === 'number' ? value : undefined}
-          onChange={(v) => {
-            if (v !== null && v !== undefined) onChange(v);
-            else onChange(0);
-          }}
-          onBlur={handleBlur}
-          onPressEnter={handleBlur}
-          className="w-full"
-        />
+        <span id={reviewFieldId} className={buildEditableCellClass(reviewFocused)}>
+          <InputNumber
+            ref={inputRef}
+            size="small"
+            value={typeof value === 'number' ? value : undefined}
+            onChange={(v) => {
+              if (v !== null && v !== undefined) onChange(v);
+              else onChange(0);
+            }}
+            onBlur={handleBlur}
+            onPressEnter={handleBlur}
+            className="w-full"
+          />
+        </span>
       );
     }
     return (
-      <Input
-        ref={inputRef}
-        size="small"
-        value={value?.toString() ?? ''}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={handleBlur}
-        onPressEnter={handleBlur}
-      />
+      <span id={reviewFieldId} className={buildEditableCellClass(reviewFocused)}>
+        <Input
+          ref={inputRef}
+          size="small"
+          value={value?.toString() ?? ''}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={handleBlur}
+          onPressEnter={handleBlur}
+        />
+      </span>
     );
   }
 
@@ -58,7 +72,8 @@ const EditableCell: React.FC<EditableCellProps> = ({
 
   return (
     <span
-      className="cursor-pointer hover:bg-blue-50 px-1 rounded min-w-[2em] inline-block"
+      id={reviewFieldId}
+      className={buildEditableCellClass(reviewFocused)}
       onClick={() => setEditing(true)}
       title="点击编辑"
     >
@@ -66,6 +81,19 @@ const EditableCell: React.FC<EditableCellProps> = ({
     </span>
   );
 };
+
+function buildEditableCellClass(reviewFocused: boolean): string {
+  return [
+    'review-editable-cell',
+    'cursor-pointer',
+    'hover:bg-blue-50',
+    'px-1',
+    'rounded',
+    'min-w-[2em]',
+    'inline-block',
+    reviewFocused ? 'review-field-target' : '',
+  ].filter(Boolean).join(' ');
+}
 
 function formatDisplay(
   value: string | number | null | undefined,
@@ -81,4 +109,3 @@ function formatDisplay(
 }
 
 export default EditableCell;
-

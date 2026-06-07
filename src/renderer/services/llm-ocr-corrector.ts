@@ -11,6 +11,7 @@
  */
 
 import { debugWarn } from '../utils/debug-log';
+import { getPlatformAdapters } from '../platform';
 
 const SYSTEM_PROMPT = `你是一个 OCR 纠错专家，专门处理中国央行个人征信报告的 OCR 识别结果。
 
@@ -56,7 +57,7 @@ async function correctChunk(chunk: string): Promise<string> {
       { role: 'user' as const, content: `请修正以下征信报告 OCR 文本中的识别错误：\n\n${chunk}` },
     ];
 
-    const result = await window.electron.llmChat(messages);
+    const result = await getPlatformAdapters().llmClient.chat(messages);
     if (!result || result.trim().length === 0) return chunk;
 
     // 基本校验：LLM 返回长度不应偏差太大，防止幻觉

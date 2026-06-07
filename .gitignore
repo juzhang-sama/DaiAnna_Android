@@ -7,6 +7,13 @@ release/
 release2/
 out/
 build/
+artifacts/
+
+# Android local/build outputs
+android/local.properties
+android/.gradle/
+android/**/build/
+android/app/release/
 
 # Local environment and secrets
 .env
@@ -16,6 +23,10 @@ build/
 *.key
 *.p12
 *.pfx
+*.jks
+*.keystore
+android/keystores/*
+!android/keystores/release.properties.example
 
 # Logs and diagnostics
 *.log

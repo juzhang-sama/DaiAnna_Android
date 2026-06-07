@@ -8,7 +8,6 @@ import type {
   DocPageMeta,
 } from '../shared/doc-parser-types';
 import { readCache, writeCache } from './doc-parser-cache';
-import { debugLog } from './logger';
 
 // ─── TextIn 响应类型（基于实际 API 返回结构） ────────
 
@@ -352,23 +351,6 @@ function convertResponse(
   fileName: string,
 ): DocParserResult {
   const { pages } = tiResp.result;
-
-  // DEBUG: 打印前2页 content 中匹配页码的行，验证编码
-  const pageRe = /第(\d+)页[，,。./\s]*共(\d+)页/;
-  for (let d = 0; d < Math.min(2, pages?.length ?? 0); d++) {
-    const pg = pages[d];
-    for (const ln of (pg.content ?? [])) {
-      if (pageRe.test(ln.text ?? '')) {
-        debugLog(`[TextIn Footer] page ${d} id=${ln.id} text="${ln.text}"`);
-      }
-    }
-    // 同时打印最后3条看原始文本
-    const tail = (pg.content ?? []).slice(-3);
-    for (const ln of tail) {
-      const hex = Buffer.from(ln.text ?? '', 'utf-8').toString('hex').slice(0, 40);
-      debugLog(`[TextIn Tail] page ${d} id=${ln.id} hex=${hex} text="${(ln.text ?? '').slice(0, 60)}"`);
-    }
-  }
 
   const docPages: DocPage[] = [];
   for (let i = 0; i < (pages?.length ?? 0); i++) {

@@ -8,13 +8,12 @@
  */
 
 import type { LoanAccount } from '../../types/credit-report';
-import type { ContextTable } from '../doc-table-bridge';
+import type { AccountSegment, ContextTable } from '../doc-table-bridge';
 import {
   getGroupValue, findLabelGroup, getLabeledValue, parseNum,
   isContinuationTable, hasLoanHeader, cleanStatus, tryMergeSplitTable,
-  parseRepaymentRecords,
+  parseRepaymentRecords, findTableValueByLabels, mergeSegmentTablesForParsing,
 } from './loan-table-utils';
-import { debugLog } from '../../utils/debug-log';
 
 /** 在 headers 中查找借款金额（兼容 OCR 变体） */
 const AMOUNT_VARIANTS = ['借款金额', '僧款金额', '款金'];
@@ -47,42 +46,40 @@ function findStatusInRows(rows: string[][]): { status: string; statusRowIdx: num
 }
 
 /** 从单张完整账户表格提取 LoanAccount */
-function extractLoanFromTable(ct: ContextTable, tableIdx?: number): LoanAccount {
+function extractLoanFromTable(ct: ContextTable): LoanAccount {
   const { headers, rows } = ct.table;
   // 统一用 gs=1，因为合并单元格值已重复填充
   const gs = 1;
 
-  // Debug: 打印表格结构
-  debugLog(`[NonRevolvingLoan] 表格${tableIdx ?? '?'} precedingText: "${ct.precedingText}"`);
-  debugLog(`[NonRevolvingLoan] headers(${headers.length}):`, headers.slice(0, 10).join(' | '));
-  debugLog(`[NonRevolvingLoan] rows count: ${rows.length}`);
-  for (let i = 0; i < Math.min(rows.length, 6); i++) {
-    debugLog(`[NonRevolvingLoan] row[${i}](${rows[i]?.length ?? 0}):`, (rows[i] ?? []).slice(0, 10).join(' | '));
-  }
-
   // 第一组：headers(标签) + row[0](值)
   const row0 = rows[0] ?? [];
-  const org = getGroupValue(row0, findLabelGroup(headers, '管理机构', gs), gs);
-  const openDate = getGroupValue(row0, findLabelGroup(headers, '开立日期', gs), gs);
-  const endDate = getGroupValue(row0, findLabelGroup(headers, '到期日期', gs), gs) || null;
+  const org = findTableValueByLabels(ct.table, '管理机构') ||
+    getGroupValue(row0, findLabelGroup(headers, '管理机构', gs), gs);
+  const openDate = findTableValueByLabels(ct.table, '开立日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '开立日期', gs), gs);
+  const endDate = findTableValueByLabels(ct.table, '到期日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '到期日期', gs), gs) || null;
   const amountIdx = findAmountGroup(headers, gs);
-  const loanAmount = amountIdx >= 0 ? parseNum(getGroupValue(row0, amountIdx, gs)) : 0;
-  const currency = getGroupValue(row0, findLabelGroup(headers, '账户币种', gs), gs);
+  const amountRaw = findTableValueByLabels(ct.table, AMOUNT_VARIANTS, 'amount') ||
+    (amountIdx >= 0 ? getGroupValue(row0, amountIdx, gs) : '');
+  const loanAmount = parseNum(amountRaw);
+  const currency = findTableValueByLabels(ct.table, '账户币种') ||
+    getGroupValue(row0, findLabelGroup(headers, '账户币种', gs), gs);
 
   // 第二组：row[1](标签) + row[2](值)
   const labelRow1 = rows[1] ?? [];
   const valueRow1 = rows[2] ?? [];
-  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', gs);
-  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', gs);
-  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', gs);
-  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', gs);
-
-  // Debug: 打印第二组提取结果
-  debugLog(`[NonRevolvingLoan] 第二组提取: businessType="${businessType}" guaranteeType="${guaranteeType}" termCount="${termCount}" repayMethod="${repayMethod}"`);
+  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', gs) ||
+    findTableValueByLabels(ct.table, '业务种类');
+  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', gs) ||
+    findTableValueByLabels(ct.table, '保方式');
+  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', gs) ||
+    findTableValueByLabels(ct.table, '还款期数', 'amount');
+  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', gs) ||
+    findTableValueByLabels(ct.table, '还款方式');
 
   // 状态与五级分类：扫描所有行找"账户状态"标签
   const { status, statusRowIdx } = findStatusInRows(rows);
-  debugLog(`[NonRevolvingLoan] findStatusInRows: status="${status}" statusRowIdx=${statusRowIdx}`);
   const isClosed = /结清|销户/.test(status);
   let fiveCategory: string | null = null;
 
@@ -102,9 +99,16 @@ function extractLoanFromTable(ct: ContextTable, tableIdx?: number): LoanAccount 
     if (!isClosed) {
       balance = parseNum(getLabeledValue(lr, vr, '余额', gs));
       remainTerms = parseNum(getLabeledValue(lr, vr, '剩余还款期数', gs)) || null;
-      monthlyPayment = parseNum(getLabeledValue(lr, vr, '本月应还款', gs));
-      paymentDueDate = getLabeledValue(lr, vr, '应还款日', gs) || null;
-      actualPayment = parseNum(getLabeledValue(lr, vr, '本月实还款', gs));
+      monthlyPayment = parseNum(
+        findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount') ||
+        getLabeledValue(lr, vr, '本月应还款', gs),
+      );
+      paymentDueDate = findTableValueByLabels(ct.table, '应还款日', 'date') ||
+        getLabeledValue(lr, vr, '应还款日', gs) || null;
+      actualPayment = parseNum(
+        findTableValueByLabels(ct.table, '本月实还款', 'amount') ||
+        getLabeledValue(lr, vr, '本月实还款', gs),
+      );
 
       const lr3 = rows[statusRowIdx + 2] ?? [];
       const vr3 = rows[statusRowIdx + 3] ?? [];
@@ -144,12 +148,33 @@ export function parseNonRevolvingLoans(tables: ContextTable[]): LoanAccount[] {
     // 完整表格至少需要 3 行：row[0]=第一组值, row[1]=第二组标签, row[2]=第二组值
     const split = tryMergeSplitTable(tables, idx, t => hasLoanHeader(t), 3);
     if (split) {
-      accounts.push(extractLoanFromTable(split.merged, idx));
+      accounts.push(extractLoanFromTable(split.merged));
       idx += split.skip;
     } else {
-      accounts.push(extractLoanFromTable(ct, idx));
+      accounts.push(extractLoanFromTable(ct));
       idx++;
     }
   }
   return accounts;
+}
+
+export function parseNonRevolvingLoanSegments(segments: AccountSegment[]): LoanAccount[] {
+  const accounts: LoanAccount[] = [];
+  for (const segment of segments) {
+    const merged = mergeSegmentTablesForParsing(segment.tables);
+    if (!merged) continue;
+    const account = extractLoanFromTable(merged);
+    if (hasUsableLoanFields(account)) {
+      accounts.push(account);
+      continue;
+    }
+
+    const parsed = parseNonRevolvingLoans(segment.tables);
+    if (parsed[0] && hasUsableLoanFields(parsed[0])) accounts.push(parsed[0]);
+  }
+  return accounts;
+}
+
+function hasUsableLoanFields(account: LoanAccount): boolean {
+  return Boolean(account.org.trim()) || account.loanAmount > 0;
 }

@@ -18,8 +18,8 @@
 | PDF 解析 | pdfjs-dist 5.x |
 | OCR 服务 | TextIn 文档解析 API |
 | LLM 服务 | DeepSeek API |
-| 数据导出 | 自生成 XLSX 文件（fflate 打包 OpenXML） |
-| 本地存储 | lowdb |
+| 数据导出 | 自生成 XLSX / DOCX 文件（fflate 打包 OpenXML） |
+| 本地存储 | Electron userData / localStorage；lowdb 仅用于冷宫产品库 |
 
 ## 架构设计
 
@@ -37,8 +37,8 @@
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                    App.tsx                            │   │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────────┐  │   │
-│  │  │ PdfViewer  │  │CreditReport│  │ ProductDrawer  │  │   │
-│  │  │            │  │   Tabs     │  │                │  │   │
+│  │  │ PdfViewer  │  │CreditReport│  │ DebtAnalysis   │  │   │
+│  │  │            │  │   Tabs     │  │ Report Tab     │  │   │
 │  │  └────────────┘  └────────────┘  └────────────────┘  │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                         ↓                                    │
@@ -66,7 +66,7 @@ src/
 │   ├── components/          # UI 组件
 │   │   ├── PdfViewer.tsx    # PDF 预览组件
 │   │   ├── CreditReportTabs.tsx  # 报告数据展示
-│   │   ├── ProductDrawer.tsx     # 产品库抽屉
+│   │   ├── ProductDrawer.tsx     # 冷宫产品匹配入口（当前不接入主界面）
 │   │   └── tabs/            # 各数据模块 Tab
 │   ├── parser/              # 征信报告解析引擎（核心）
 │   │   ├── index.ts         # 解析入口
@@ -117,7 +117,7 @@ pdfjs 直提文本      TextIn OCR API
              │
     ┌────────┴────────┐
     ▼                 ▼
-UI 展示          Excel 导出
+UI 展示          Excel/Word 导出
 ```
 
 ## 解析引擎架构

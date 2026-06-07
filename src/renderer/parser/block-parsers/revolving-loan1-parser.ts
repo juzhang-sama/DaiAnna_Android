@@ -14,11 +14,12 @@
  */
 
 import type { LoanAccount } from '../../types/credit-report';
-import type { ContextTable } from '../doc-table-bridge';
+import type { AccountSegment, ContextTable } from '../doc-table-bridge';
 import {
   getGroupValue, findLabelGroup, getLabeledValue, parseNum,
   isContinuationTable, hasLoanHeader, tryMergeSplitTable,
-  parseRepaymentRecords,
+  parseRepaymentRecords, findTableValueByLabels, mergeSegmentTablesForParsing,
+  cleanStatus,
 } from './loan-table-utils';
 
 /** 循环贷一统一用 groupSize=1（合并单元格值已重复填充，无需分组） */
@@ -32,6 +33,15 @@ function findLoanAmountGroup(headers: string[]): number {
 
 /** 从 row[4] 标签行判断账户状态（结清/在贷） */
 function extractStatus(rows: string[][]): string {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    if (!row.some(c => c.includes('状态'))) continue;
+    const valueRow = rows[i + 1] ?? [];
+    const idx = row.findIndex(c => c.includes('账户状态') || c.includes('状态'));
+    const raw = valueRow[idx] ?? valueRow[0] ?? row[idx] ?? '';
+    return cleanStatus(raw) || '结清';
+  }
+
   const labelRow = rows[4] ?? [];
   const valueRow = rows[5] ?? [];
 
@@ -52,20 +62,30 @@ function extractLoanFromTable(ct: ContextTable): LoanAccount {
 
   // 第一组：headers(标签) + row[0](值)
   const row0 = rows[0] ?? [];
-  const org = getGroupValue(row0, findLabelGroup(headers, '管理机构', GS), GS);
-  const openDate = getGroupValue(row0, findLabelGroup(headers, '开立日期', GS), GS);
-  const endDate = getGroupValue(row0, findLabelGroup(headers, '到期日期', GS), GS) || null;
+  const org = findTableValueByLabels(ct.table, '管理机构') ||
+    getGroupValue(row0, findLabelGroup(headers, '管理机构', GS), GS);
+  const openDate = findTableValueByLabels(ct.table, '开立日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '开立日期', GS), GS);
+  const endDate = findTableValueByLabels(ct.table, '到期日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '到期日期', GS), GS) || null;
   const amountIdx = findLoanAmountGroup(headers);
-  const loanAmount = amountIdx >= 0 ? parseNum(getGroupValue(row0, amountIdx, GS)) : 0;
-  const currency = getGroupValue(row0, findLabelGroup(headers, '账户币种', GS), GS);
+  const amountRaw = findTableValueByLabels(ct.table, ['借款金额', '僧款金额', '款金'], 'amount') ||
+    (amountIdx >= 0 ? getGroupValue(row0, amountIdx, GS) : '');
+  const loanAmount = parseNum(amountRaw);
+  const currency = findTableValueByLabels(ct.table, '账户币种') ||
+    getGroupValue(row0, findLabelGroup(headers, '账户币种', GS), GS);
 
   // 第二组：row[1](标签) + row[2](值)
   const labelRow1 = rows[1] ?? [];
   const valueRow1 = rows[2] ?? [];
-  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', GS);
-  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', GS);
-  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', GS);
-  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', GS);
+  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', GS) ||
+    findTableValueByLabels(ct.table, '业务种类');
+  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', GS) ||
+    findTableValueByLabels(ct.table, '保方式');
+  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', GS) ||
+    findTableValueByLabels(ct.table, '还款期数', 'amount');
+  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', GS) ||
+    findTableValueByLabels(ct.table, '还款方式');
 
   // 第三组：row[4]+row[5] — 账户状态与五级分类
   const status = extractStatus(rows);
@@ -87,9 +107,16 @@ function extractLoanFromTable(ct: ContextTable): LoanAccount {
   if (!isClosed) {
     balance = parseNum(getLabeledValue(lr2, vr2, '余额', GS));
     remainTerms = parseNum(getLabeledValue(lr2, vr2, '剩余还款期数', GS)) || null;
-    monthlyPayment = parseNum(getLabeledValue(lr2, vr2, '本月应还款', GS));
-    paymentDueDate = getLabeledValue(lr2, vr2, '应还款日', GS) || null;
-    actualPayment = parseNum(getLabeledValue(lr2, vr2, '本月实还款', GS));
+    monthlyPayment = parseNum(
+      findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount') ||
+      getLabeledValue(lr2, vr2, '本月应还款', GS),
+    );
+    paymentDueDate = findTableValueByLabels(ct.table, '应还款日', 'date') ||
+      getLabeledValue(lr2, vr2, '应还款日', GS) || null;
+    actualPayment = parseNum(
+      findTableValueByLabels(ct.table, '本月实还款', 'amount') ||
+      getLabeledValue(lr2, vr2, '本月实还款', GS),
+    );
 
     const lr3 = rows[6] ?? [];
     const vr3 = rows[7] ?? [];
@@ -134,4 +161,25 @@ export function parseRevolvingLoans1(tables: ContextTable[]): LoanAccount[] {
     }
   }
   return accounts;
+}
+
+export function parseRevolvingLoan1Segments(segments: AccountSegment[]): LoanAccount[] {
+  const accounts: LoanAccount[] = [];
+  for (const segment of segments) {
+    const merged = mergeSegmentTablesForParsing(segment.tables);
+    if (!merged) continue;
+    const account = extractLoanFromTable(merged);
+    if (hasUsableLoanFields(account)) {
+      accounts.push(account);
+      continue;
+    }
+
+    const parsed = parseRevolvingLoans1(segment.tables);
+    if (parsed[0] && hasUsableLoanFields(parsed[0])) accounts.push(parsed[0]);
+  }
+  return accounts;
+}
+
+function hasUsableLoanFields(account: LoanAccount): boolean {
+  return Boolean(account.org.trim()) || account.loanAmount > 0;
 }

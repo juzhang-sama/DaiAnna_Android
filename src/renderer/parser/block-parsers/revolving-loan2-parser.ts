@@ -15,11 +15,11 @@
  */
 
 import type { RevolvingLoanAccount } from '../../types/credit-report';
-import type { ContextTable } from '../doc-table-bridge';
+import type { AccountSegment, ContextTable } from '../doc-table-bridge';
 import {
   getGroupValue, findLabelGroup, getLabeledValue, parseNum,
   hasLoanHeader, cleanOrg, cleanStatus, cleanNumStr, tryMergeSplitTable,
-  parseRepaymentRecords,
+  parseRepaymentRecords, findTableValueByLabels, mergeSegmentTablesForParsing,
 } from './loan-table-utils';
 
 /** 统一用 groupSize=1（合并单元格值已重复填充） */
@@ -61,23 +61,32 @@ function extractFromTable(ct: ContextTable): RevolvingLoanAccount {
 
   // 第一组：headers(标签) + row[0](值)
   const row0 = rows[0] ?? [];
-  const orgRaw = getGroupValue(row0, findLabelGroup(headers, '管理机构', GS), GS);
+  const orgRaw = findTableValueByLabels(ct.table, '管理机构') ||
+    getGroupValue(row0, findLabelGroup(headers, '管理机构', GS), GS);
   const org = cleanOrg(orgRaw);
-  const openDate = getGroupValue(row0, findLabelGroup(headers, '开立日期', GS), GS);
-  const endDate = getGroupValue(row0, findLabelGroup(headers, '到期日期', GS), GS) || null;
+  const openDate = findTableValueByLabels(ct.table, '开立日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '开立日期', GS), GS);
+  const endDate = findTableValueByLabels(ct.table, '到期日期', 'date') ||
+    getGroupValue(row0, findLabelGroup(headers, '到期日期', GS), GS) || null;
   const limitIdx = findCreditLimitGroup(headers);
-  const limitRaw = limitIdx >= 0 ? getGroupValue(row0, limitIdx, GS) : '';
+  const limitRaw = findTableValueByLabels(ct.table, '账户授信额度', 'amount') ||
+    (limitIdx >= 0 ? getGroupValue(row0, limitIdx, GS) : '');
   const creditLimit = parseNum(cleanNumStr(limitRaw));
-  const currencyRaw = getGroupValue(row0, findLabelGroup(headers, '账户币种', GS), GS);
+  const currencyRaw = findTableValueByLabels(ct.table, '账户币种') ||
+    getGroupValue(row0, findLabelGroup(headers, '账户币种', GS), GS);
   const currency = cleanNumStr(currencyRaw);
 
   // 第二组：row[1](标签) + row[2](值)
   const labelRow1 = rows[1] ?? [];
   const valueRow1 = rows[2] ?? [];
-  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', GS);
-  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', GS);
-  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', GS);
-  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', GS);
+  const businessType = getLabeledValue(labelRow1, valueRow1, '业务种类', GS) ||
+    findTableValueByLabels(ct.table, '业务种类');
+  const guaranteeType = getLabeledValue(labelRow1, valueRow1, '保方式', GS) ||
+    findTableValueByLabels(ct.table, '保方式');
+  const termCount = getLabeledValue(labelRow1, valueRow1, '还款期数', GS) ||
+    findTableValueByLabels(ct.table, '还款期数', 'amount');
+  const repayMethod = getLabeledValue(labelRow1, valueRow1, '还款方式', GS) ||
+    findTableValueByLabels(ct.table, '还款方式');
 
   // 第三组：row[4]+row[5] — 账户状态与五级分类
   const statusRaw = extractStatus(rows, 0);
@@ -100,9 +109,16 @@ function extractFromTable(ct: ContextTable): RevolvingLoanAccount {
   if (!isClosed) {
     balance = parseNum(getLabeledValue(lr2, vr2, '余额', GS));
     remainTerms = parseNum(getLabeledValue(lr2, vr2, '剩余还款期数', GS)) || null;
-    monthlyPayment = parseNum(getLabeledValue(lr2, vr2, '本月应还款', GS));
-    paymentDueDate = getLabeledValue(lr2, vr2, '应还款日', GS) || null;
-    actualPayment = parseNum(getLabeledValue(lr2, vr2, '本月实还款', GS));
+    monthlyPayment = parseNum(
+      findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount') ||
+      getLabeledValue(lr2, vr2, '本月应还款', GS),
+    );
+    paymentDueDate = findTableValueByLabels(ct.table, '应还款日', 'date') ||
+      getLabeledValue(lr2, vr2, '应还款日', GS) || null;
+    actualPayment = parseNum(
+      findTableValueByLabels(ct.table, '本月实还款', 'amount') ||
+      getLabeledValue(lr2, vr2, '本月实还款', GS),
+    );
 
     const lr3 = rows[6] ?? [];
     const vr3 = rows[7] ?? [];
@@ -143,4 +159,25 @@ export function parseRevolvingLoans2(tables: ContextTable[]): RevolvingLoanAccou
     }
   }
   return accounts;
+}
+
+export function parseRevolvingLoan2Segments(segments: AccountSegment[]): RevolvingLoanAccount[] {
+  const accounts: RevolvingLoanAccount[] = [];
+  for (const segment of segments) {
+    const merged = mergeSegmentTablesForParsing(segment.tables);
+    if (!merged) continue;
+    const account = extractFromTable(merged);
+    if (hasUsableRevolvingLoanFields(account)) {
+      accounts.push(account);
+      continue;
+    }
+
+    const parsed = parseRevolvingLoans2(segment.tables);
+    if (parsed[0] && hasUsableRevolvingLoanFields(parsed[0])) accounts.push(parsed[0]);
+  }
+  return accounts;
+}
+
+function hasUsableRevolvingLoanFields(account: RevolvingLoanAccount): boolean {
+  return Boolean(account.org.trim()) || account.creditLimit > 0;
 }

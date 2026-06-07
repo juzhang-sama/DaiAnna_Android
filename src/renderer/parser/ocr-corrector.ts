@@ -40,6 +40,8 @@ const CREDIT_TERMS: string[] = [
   '住房公积金', '养老保险金',
 ];
 
+const CREDIT_TERM_SET = new Set(CREDIT_TERMS);
+
 /**
  * 形近字映射表
  * key: OCR 常见错误字, value: 正确字
@@ -145,6 +147,7 @@ function fixTermsByFuzzyMatch(text: string): string {
 
     result = result.replace(regex, (match) => {
       if (match === term) return match; // 已经正确，跳过
+      if (CREDIT_TERM_SET.has(match)) return match; // 不把一个标准术语改成另一个标准术语
       if (!isSafeTermReplacement(match, term)) return match;
       return term;
     });

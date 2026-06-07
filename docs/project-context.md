@@ -4,7 +4,7 @@
 
 ## 一、项目定位
 
-本项目是一个 Electron 桌面端征信报告解析工具，面向助贷/信贷业务场景。用户上传央行二代个人征信报告 PDF 或图片后，系统自动提取结构化数据，展示账户明细、查询记录、信用评估、产品匹配结果，并支持导出 Excel。
+本项目是一个 Electron 桌面端征信报告解析工具，面向助贷/信贷业务场景。用户上传央行二代个人征信报告 PDF 或图片后，系统自动提取结构化数据，展示账户明细、查询记录、信用评估、债务分析结果，并支持导出 Excel/Word。
 
 核心目标不是简单 OCR，而是把征信报告中的表格、账户、查询记录和授信信息转成可校验、可编辑、可导出的业务数据。
 
@@ -19,7 +19,7 @@
 | 扫描件/图片文档解析 | TextIn 文档解析 API |
 | LLM 说明生成 | DeepSeek API |
 | 本地配置 | Electron userData + safeStorage |
-| 本地产品库 | lowdb/localStorage |
+| 冷宫产品库 | lowdb/localStorage（产品匹配已下线，代码保留待召回） |
 | Excel 导出 | 手写 OpenXML，使用 fflate 打包 XLSX |
 
 ## 三、运行时数据流
@@ -32,7 +32,7 @@
   -> DocParserResult / fullText
   -> renderer/parser/index.ts
   -> CreditReport + ClientProfile
-  -> UI 展示、信用评估、产品匹配、Excel 导出
+  -> UI 展示、信用评估、债务分析、Excel/Word 导出
 ```
 
 ## 四、OCR/TextIn 适配
@@ -93,3 +93,4 @@ node scripts/verify-parse2.mjs "full text view.txt"
 - 新增解析规则时应尽量补充 fixture 测试，覆盖 `DocParserResult` -> 表格分类 -> 账户分组 -> 业务字段提取。
 - 历史文档中的百度 OCR 记录仅作为迁移背景；当前运行时主路径是 TextIn。
 - 业务字段应尽量保留 provenance，方便用户回查来源页和来源表。
+- 产品匹配已打入冷宫：相关代码保留但不接入主界面，后续如需召回，应先重新校准产品规则、机构库和征信画像字段。

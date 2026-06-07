@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, message, Button, Divider } from 'antd';
+import { getPlatformAdapters } from '../platform';
 
 interface SetupModalProps {
   open: boolean;
@@ -21,26 +22,27 @@ interface KeyFormValues {
 
 const SetupModal: React.FC<SetupModalProps> = ({ open, onSuccess }) => {
   const [form] = Form.useForm<KeyFormValues>();
+  const platform = getPlatformAdapters();
   const [saving, setSaving] = useState(false);
   const [cacheStats, setCacheStats] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
 
   useEffect(() => {
     if (!open) return;
-    window.electron.getApiKeys().then((keys) => {
+    platform.keyStore.getKeys().then((keys) => {
       form.setFieldsValue({
         textinAppId: keys.textinAppId ?? '',
         textinSecretCode: keys.textinSecretCode ?? '',
         deepseekApiKey: keys.deepseekApiKey ?? '',
       });
     });
-    window.electron.getDocParserCacheStats().then(setCacheStats);
-  }, [open, form]);
+    platform.cache.getStats().then(setCacheStats);
+  }, [open, form, platform]);
 
   const handleSave = async () => {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await window.electron.setApiKeys(values);
+      await platform.keyStore.setKeys(values);
       message.success('API Key 已保存并立即生效');
       onSuccess();
     } catch {
@@ -51,7 +53,7 @@ const SetupModal: React.FC<SetupModalProps> = ({ open, onSuccess }) => {
   };
 
   const handleClearCache = async () => {
-    const removed = await window.electron.clearDocParserCache();
+    const removed = await platform.cache.clear();
     setCacheStats({ count: 0, bytes: 0 });
     message.success(`已清理 ${removed} 个 OCR 缓存文件`);
   };

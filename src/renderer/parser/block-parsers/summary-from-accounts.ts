@@ -12,7 +12,7 @@ import type { RebuiltTable } from '../table-rebuilder';
 import type { ContextTable } from '../doc-table-bridge';
 import { groupAccountTables } from '../doc-table-bridge';
 import { getFieldMapping, type AccountCategory } from '../account-field-mappings';
-import type { ParsedTable } from '../markdown-table-parser';
+import { findTableValueByLabels } from './loan-table-utils';
 
 /** 单个账户提取的关键字段 */
 interface AccountFields {
@@ -94,69 +94,19 @@ function extractFieldsFromDocTable(ct: ContextTable, category: AccountCategory):
   const mapping = getFieldMapping(category);
 
   // 在整个表格中搜索标签并提取对应值
-  const orgName = findLabelValue(t, mapping.org);
-  const creditAmount = parseDocNum(findLabelValue(t, mapping.creditAmount));
-  const balance = parseDocNum(findLabelValue(t, mapping.balance));
-  let monthlyPayment = parseDocNum(findLabelValue(t, mapping.monthlyPayment));
-  const statusVal = findLabelValue(t, mapping.accountStatus);
+  const orgName = findTableValueByLabels(t, mapping.org);
+  const creditAmount = parseDocNum(findTableValueByLabels(t, mapping.creditAmount, 'amount'));
+  const balance = parseDocNum(findTableValueByLabels(t, mapping.balance, 'amount'));
+  let monthlyPayment = parseDocNum(
+    findTableValueByLabels(t, [mapping.monthlyPayment, '本月应还', '应还款额', '本期应还'], 'amount'),
+  );
+  const statusVal = findTableValueByLabels(t, mapping.accountStatus);
 
   // 判断是否结清
   const isClosed = /结清|销户/.test(statusVal);
   if (isClosed) monthlyPayment = 0;
 
   return { orgName, creditAmount, balance, monthlyPayment, isClosed };
-}
-
-/**
- * 在表格中查找标签并返回对应的值
- * 支持三种表格结构：
- * 1. headers 包含标签，row[0] 包含值（按列组织）
- * 2. 某行的某个单元格包含标签，下一个单元格是值（标签-值对）
- * 3. 某行第一列包含标签，后续列是值（按行组织）
- */
-function findLabelValue(t: ParsedTable, label: string): string {
-  if (!label) return '';
-
-  // 方式1：在 headers 中查找标签，返回 row[0] 对应位置的值
-  for (let col = 0; col < t.headers.length; col++) {
-    if (t.headers[col].includes(label)) {
-      return t.rows[0]?.[col]?.trim() ?? '';
-    }
-  }
-
-  // 方式2：在所有行的所有单元格中查找标签
-  for (let rowIdx = 0; rowIdx < t.rows.length; rowIdx++) {
-    const row = t.rows[rowIdx];
-    for (let colIdx = 0; colIdx < row.length; colIdx++) {
-      const cell = row[colIdx] ?? '';
-      if (cell.includes(label)) {
-        // 找到标签后，返回下一个单元格的值（同行右侧）
-        if (colIdx + 1 < row.length) {
-          const nextVal = row[colIdx + 1]?.trim() ?? '';
-          if (nextVal && !isLabelCell(nextVal)) {
-            return nextVal;
-          }
-        }
-        // 或者返回下一行同列的值
-        if (rowIdx + 1 < t.rows.length) {
-          const belowVal = t.rows[rowIdx + 1]?.[colIdx]?.trim() ?? '';
-          if (belowVal && !isLabelCell(belowVal)) {
-            return belowVal;
-          }
-        }
-      }
-    }
-  }
-
-  return '';
-}
-
-/** 判断单元格是否是标签（而非数值） */
-function isLabelCell(val: string): boolean {
-  // 如果包含字段名关键词且不是纯数字，可能是标签。不能把"正常"这类状态值误判为标签。
-  const hasChineseLabel = /机构|种类|方式|状态|额度|余额|日期|还款|期数|分类|币种|账户|金额|借款|利率|标识|合同|到期|开立|证件|编号|授信/.test(val);
-  const isNumeric = /^[\d,.\-]+$/.test(val.replace(/\s/g, ''));
-  return hasChineseLabel && !isNumeric;
 }
 
 /** 解析文档解析返回的数值字符串 */
