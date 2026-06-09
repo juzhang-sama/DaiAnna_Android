@@ -105,8 +105,14 @@ function extractLoanFromTable(ct: ContextTable): LoanAccount {
   fiveCategory = getLabeledValue(lr2, vr2, '五级分类', GS) || null;
 
   if (!isClosed) {
-    balance = parseNum(getLabeledValue(lr2, vr2, '余额', GS));
-    remainTerms = parseNum(getLabeledValue(lr2, vr2, '剩余还款期数', GS)) || null;
+    balance = parseNum(
+      findTableValueByLabels(ct.table, ['余额', '佘额'], 'amount') ||
+      getLabeledValue(lr2, vr2, '余额', GS),
+    );
+    remainTerms = parseNum(
+      findTableValueByLabels(ct.table, ['剩余还款期数', '剩余期数', '剩余还款'], 'amount') ||
+      getLabeledValue(lr2, vr2, '剩余还款期数', GS),
+    ) || null;
     monthlyPayment = parseNum(
       findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount') ||
       getLabeledValue(lr2, vr2, '本月应还款', GS),

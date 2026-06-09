@@ -14,9 +14,11 @@ import { validateCreditReportData } from './credit-report-validation';
 import { normalizeCreditReportInstitutions } from './institution-normalizer';
 import { fuseDocParserCandidateTables } from './doc-parser-candidate-fusion';
 import { pdfToImages } from './pdf-to-image';
+import { getImageProcessingDiagnostics } from './image-processing-diagnostics';
 import type { CreditReport } from '../types/credit-report';
 import type {
   ImageQualityDiagnostic,
+  ImageProcessingDiagnostic,
   InstitutionCorrectionDiagnostic,
   OcrCandidateDiagnostic,
   OcrDiagnosticsReport,
@@ -45,6 +47,7 @@ const CREDIT_DETAIL_TEXT_SIGNALS = [
   '\u76f8\u5173\u8fd8\u6b3e\u8d23\u4efb',
   '\u6388\u4fe1\u534f\u8bae',
 ];
+const MULTI_IMAGE_OCR_CONCURRENCY = 2;
 
 interface OcrDocumentResult {
   docResult: DocParserResult;
@@ -165,9 +168,11 @@ function buildDiagnostics(
   images: ImageQualityDiagnostic[] = [],
   candidates: OcrCandidateDiagnostic[] = [],
   institutionCorrections: InstitutionCorrectionDiagnostic[] = [],
+  processing: ImageProcessingDiagnostic[] = [],
 ): OcrDiagnosticsReport {
   return {
     images,
+    processing,
     candidates,
     institutionCorrections,
     validation: validateCreditReportData(report),
@@ -329,7 +334,7 @@ async function analyzeSingleCreditReport(file: File): Promise<OcrResult> {
     confidence,
     report,
     quality,
-    diagnostics: buildDiagnostics(report, imageDiagnostics, candidateDiagnostics, corrections),
+    diagnostics: buildDiagnostics(report, imageDiagnostics, candidateDiagnostics, corrections, image ? getImageProcessingDiagnostics([file]) : []),
   };
 }
 
@@ -355,7 +360,7 @@ async function analyzeImageSetCreditReport(files: File[]): Promise<OcrResult> {
     confidence,
     report,
     quality,
-    diagnostics: buildDiagnostics(report, imageDiagnostics, imageResult.candidates, corrections),
+    diagnostics: buildDiagnostics(report, imageDiagnostics, imageResult.candidates, corrections, getImageProcessingDiagnostics(files)),
   };
 }
 
@@ -476,19 +481,39 @@ async function analyzeMultiImageViaOcr(
   files: File[],
   imageDiagnostics: ImageQualityDiagnostic[],
 ): Promise<OcrDocumentResult> {
-  const results: DocParserResult[] = [];
-  const candidates: OcrCandidateDiagnostic[] = [];
-  for (let i = 0; i < files.length; i++) {
+  const pageResults = await mapWithConcurrency(files, MULTI_IMAGE_OCR_CONCURRENCY, async (file, i) => {
     debugLog(`[DocParser] OCR image ${i + 1}/${files.length}:`, files[i].name);
     const result = await analyzeImageViaOcrCandidates(files[i], imageDiagnostics[i]);
-    results.push(result.docResult);
-    candidates.push(...result.candidates);
-  }
+    return result;
+  });
+
+  const results = pageResults.map((result) => result.docResult);
+  const candidates = pageResults.flatMap((result) => result.candidates);
 
   return {
     docResult: normalizeOcrDocResult(mergeDocParserResults(results, buildMultiImageFileName(files))),
     candidates,
   };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex++;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
 }
 
 async function parseBase64Candidate(
@@ -509,6 +534,7 @@ async function buildPreprocessCandidates(
   base64: string,
 ): Promise<Array<{ variant: string; base64: string }>> {
   const variants: Array<{ variant: string; options: Partial<PreprocessOptions> }> = [
+    { variant: '去阴影灰度', options: { contrast: 1.18, binarize: false, shadowCorrection: true, denoise: false, sharpen: 0.12 } },
     { variant: '增强对比', options: { contrast: 1.35, binaryThreshold: 175, denoise: false } },
     { variant: '轻二值化', options: { contrast: 1.55, binaryThreshold: 155, denoise: true } },
     { variant: '自适应二值化', options: { contrast: 1.45, adaptiveThreshold: true, denoise: true } },

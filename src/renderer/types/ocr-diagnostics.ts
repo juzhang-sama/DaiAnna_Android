@@ -20,6 +20,32 @@ export interface OcrCandidateDiagnostic {
   issues: string[];
 }
 
+export type ImageProcessingStrategy = 'scan-corrected' | 'fallback-enhanced';
+
+export interface ImageProcessingDiagnostic {
+  fileName: string;
+  originalFileName: string;
+  pageNumber: number;
+  strategy: ImageProcessingStrategy;
+  detected: boolean;
+  scanLevel: 'pass' | 'warn' | 'reject';
+  scanScore: number;
+  coverage: number;
+  aspectRatio: number;
+  skew: number;
+  originalWidth: number;
+  originalHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  originalBytes?: number;
+  outputBytes?: number;
+  compressionRatio?: number | null;
+  outputQualityScore: number;
+  outputSharpness: number;
+  outputBrightness: number;
+  issues: string[];
+}
+
 export interface CreditReportValidationIssue {
   id: string;
   severity: DiagnosticSeverity;
@@ -65,6 +91,7 @@ export interface OcrReviewState {
 
 export interface OcrDiagnosticsReport {
   images: ImageQualityDiagnostic[];
+  processing?: ImageProcessingDiagnostic[];
   candidates: OcrCandidateDiagnostic[];
   institutionCorrections?: InstitutionCorrectionDiagnostic[];
   validation: CreditReportValidationReport;

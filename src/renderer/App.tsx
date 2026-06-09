@@ -18,16 +18,18 @@ import {
 import PdfViewer from './components/PdfViewer';
 import CreditReportTabs, { type ReportTabKey } from './components/CreditReportTabs';
 import SetupModal from './components/SetupModal';
+import CameraCaptureModal from './components/CameraCaptureModal';
 import { CreditReport, createEmptyCreditReport } from './types/credit-report';
 import { analyzeCreditReportFiles } from './services/ocr-service';
 import { isImageFile } from './config/ocr-config';
 import { logError } from './utils/debug-log';
 import { getPlatformAdapters } from './platform';
 import type { DocumentInput } from './platform';
+import { evaluateCaptureQuality, type CaptureQualityResult } from './services/capture-quality';
 import type { OcrQualityReport } from './parser/ocr-quality';
 import type { OcrDiagnosticsReport, OcrReviewState } from './types/ocr-diagnostics';
-import { buildDebtAnalysisReport } from './services/debt-analysis-report';
 import { validateCreditReportData } from './services/credit-report-validation';
+import { standardizeImageForOcr } from './services/ocr-image-standardizer';
 
 const { Header, Content } = Layout;
 
@@ -48,15 +50,6 @@ const NAV_ITEMS: Array<{
   { key: 'provenance', label: '字段溯源', icon: <ProfileOutlined />, requiresReport: true },
 ];
 
-function formatYuan(value: number): string {
-  return `¥ ${Math.round(value).toLocaleString('zh-CN')}`;
-}
-
-function formatPercent(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '-';
-  return `${Math.round(value * 1000) / 10}%`;
-}
-
 const App: React.FC = () => {
   const platform = useMemo(() => getPlatformAdapters(), []);
   const platformAvailable = platform.available;
@@ -66,14 +59,15 @@ const App: React.FC = () => {
   const [quality, setQuality] = useState<OcrQualityReport | undefined>();
   const [diagnostics, setDiagnostics] = useState<OcrDiagnosticsReport | undefined>();
   const [reviewState, setReviewState] = useState<OcrReviewState>({ reviewedIssueIds: [] });
+  const [preflightQuality, setPreflightQuality] = useState<CaptureQualityResult[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>('pdf');
   const [setupOpen, setSetupOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [keysReady, setKeysReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const analyzeSeqRef = useRef(0);
   const hasReport = Boolean(report.header.reportNo);
-  const analysis = useMemo(() => buildDebtAnalysisReport(report), [report]);
   const validation = useMemo(() => validateCreditReportData(report), [report]);
   const reviewedIds = useMemo(() => new Set(reviewState.reviewedIssueIds), [reviewState.reviewedIssueIds]);
   const pendingReviewCount = useMemo(() => (
@@ -81,18 +75,16 @@ const App: React.FC = () => {
       (issue.severity === 'critical' || issue.severity === 'warning') && !reviewedIds.has(issue.id)
     )).length
   ), [reviewedIds, validation.issues]);
-  const qualityScore = diagnostics?.validation.score ?? quality?.score ?? validation.score;
-  const configTag = keysReady ? <Tag color="green">配置就绪</Tag> : <Tag color="gold">待配置</Tag>;
-  const parseTag = analyzing
-    ? <Tag color="processing" icon={<ClockCircleOutlined />}>解析中</Tag>
-    : hasReport
-      ? <Tag color="green" icon={<CheckCircleOutlined />}>解析完成</Tag>
-      : <Tag>等待文件</Tag>;
-  const reviewTag = hasReport && pendingReviewCount === 0
-    ? <Tag color="blue">复核通过</Tag>
-    : hasReport
-      ? <Tag color="orange">待复核 {pendingReviewCount}</Tag>
-      : <Tag>未开始</Tag>;
+  const parseTag = analyzing ? (
+    <Tag color="processing" icon={<ClockCircleOutlined />}>解析中</Tag>
+  ) : hasReport ? (
+    <Tag color="green" icon={<CheckCircleOutlined />}>解析完成</Tag>
+  ) : null;
+  const reviewTag = hasReport ? (
+    pendingReviewCount === 0
+      ? <Tag color="blue">复核通过</Tag>
+      : <Tag color="orange">待复核 {pendingReviewCount}</Tag>
+  ) : null;
 
   useEffect(() => {
     if (!platformAvailable) return;
@@ -105,7 +97,33 @@ const App: React.FC = () => {
     });
   }, [platform, platformAvailable]);
 
-  const handleFilesChange = useCallback(async (files: File[], preferredPage = 1) => {
+  useEffect(() => {
+    let cancelled = false;
+    if (documentFiles.length === 0 || !documentFiles.every(isImageFile)) {
+      setPreflightQuality([]);
+      return;
+    }
+
+    Promise.all(documentFiles.map((file) => evaluateCaptureQuality(file)))
+      .then((reports) => {
+        if (!cancelled) setPreflightQuality(reports);
+      })
+      .catch((err) => {
+        logError('[preflightQuality] error:', err);
+        if (!cancelled) setPreflightQuality([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [documentFiles]);
+
+  const handleFilesChange = useCallback(async (
+    files: File[],
+    preferredPage = 1,
+    options: { analyze?: boolean } = {},
+  ) => {
+    const shouldAnalyze = options.analyze ?? true;
     const nextFiles = files.filter(Boolean);
     if (nextFiles.length > 1 && !nextFiles.every(isImageFile)) {
       message.warning('多文件上传仅支持图片。PDF 请单独上传，图片可多张组成一套征信报告。');
@@ -119,11 +137,22 @@ const App: React.FC = () => {
     setReviewState({ reviewedIssueIds: [] });
 
     if (nextFiles.length === 0) {
+      setReport(createEmptyCreditReport());
       setQuality(undefined);
       setDiagnostics(undefined);
       setAnalyzing(false);
       return;
     }
+
+    if (!shouldAnalyze) {
+      setReport(createEmptyCreditReport());
+      setQuality(undefined);
+      setDiagnostics(undefined);
+      setAnalyzing(false);
+      setActiveSection('pdf');
+      return;
+    }
+
     if (!platformAvailable) {
       message.warning('当前平台暂未接入 OCR 解析能力');
       return;
@@ -155,29 +184,106 @@ const App: React.FC = () => {
   }, [platformAvailable]);
 
   const handleTakePhoto = useCallback(async () => {
+    setCameraOpen(true);
+  }, []);
+
+  const handleNativeTakePhoto = useCallback(async () => {
     if (!platform.files) return;
+    setCameraOpen(false);
+    const nextPageNumber = documentFiles.length + 1;
     try {
       const input = await platform.files.takePhoto();
       const file = await documentInputToFile(input, platform.files.readAsBase64);
-      await handleFilesChange([...documentFiles, file], documentFiles.length + 1);
+      const optimized = await standardizeImageForOcr(file, nextPageNumber);
+      await handleFilesChange([...documentFiles, optimized], nextPageNumber, { analyze: false });
+      message.success(`已加入第 ${nextPageNumber} 页，可继续拍照或点击开始解析`);
     } catch (err) {
+      if (isUserCanceledNativePicker(err)) return;
       logError('[platform.takePhoto] error:', err);
-      message.error('拍照失败或已取消');
+      message.error('拍照失败，请重试');
     }
   }, [documentFiles, handleFilesChange, platform.files]);
+
+  const handleCameraCapture = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    const firstPageNumber = documentFiles.length + 1;
+    try {
+      const captured: File[] = [];
+      for (let index = 0; index < files.length; index++) {
+        captured.push(await standardizeImageForOcr(files[index], firstPageNumber + index));
+        await nextFrame();
+      }
+      await handleFilesChange([...documentFiles, ...captured], firstPageNumber + captured.length - 1, { analyze: false });
+      message.success(`已加入 ${captured.length} 页，可继续复核或点击开始解析`);
+    } catch (err) {
+      logError('[cameraCapture] error:', err);
+      message.error('图片处理失败，请重拍');
+    }
+  }, [documentFiles, handleFilesChange]);
+
+  const handleAnalyzeCurrentFiles = useCallback(async () => {
+    if (documentFiles.length === 0) {
+      message.info('请先拍照或上传征信报告');
+      return;
+    }
+    const riskyPages = preflightQuality
+      .map((item, index) => ({ item, page: index + 1 }))
+      .filter(({ item }) => item.level === 'reject');
+    if (riskyPages.length > 0) {
+      message.warning(`有 ${riskyPages.length} 页质检风险较高，已继续解析，结果建议重点复核`);
+    }
+    await handleFilesChange(documentFiles, currentPage, { analyze: true });
+  }, [currentPage, documentFiles, handleFilesChange, preflightQuality]);
 
   const handlePickPlatformFiles = useCallback(async () => {
     if (!platform.files) return;
     try {
-      const inputs = await platform.files.pickFiles();
+      const inputs = await platform.files.pickFiles({ source: 'documents' });
       if (inputs.length === 0) return;
-      const files = await Promise.all(
-        inputs.map((input) => documentInputToFile(input, platform.files!.readAsBase64)),
-      );
-      await handleFilesChange(files);
+      const files: File[] = [];
+      for (let index = 0; index < inputs.length; index++) {
+        const file = await documentInputToFile(inputs[index], platform.files!.readAsBase64);
+        files.push(isImageFile(file) ? await standardizeImageForOcr(file, index + 1) : file);
+        await nextFrame();
+      }
+      await handleFilesChange(files, 1, { analyze: false });
+      message.success(files.length === 1 && !isImageFile(files[0])
+        ? '已导入 PDF，请确认后开始解析'
+        : `已导入 ${files.length} 个文件，请确认顺序后开始解析`);
     } catch (err) {
+      if (isUserCanceledNativePicker(err)) return;
       logError('[platform.pickFiles] error:', err);
-      message.error('相册导入失败或已取消');
+      message.error(err instanceof Error ? err.message : '文件导入失败，请重试');
+    }
+  }, [handleFilesChange, platform.files]);
+
+  const handlePickPlatformImages = useCallback(async () => {
+    if (!platform.files) return;
+    try {
+      const inputs = await platform.files.pickFiles({ source: 'images' });
+      if (inputs.length === 0) {
+        message.warning('没有获取到相册图片，请重新选择');
+        return;
+      }
+      const files: File[] = [];
+      for (let index = 0; index < inputs.length; index++) {
+        message.loading({
+          content: `正在扫描增强第 ${index + 1}/${inputs.length} 张`,
+          key: 'gallery-import',
+          duration: 0,
+        });
+        const file = await documentInputToFile(inputs[index], platform.files.readAsBase64);
+        files.push(await standardizeImageForOcr(file, index + 1));
+        await nextFrame();
+      }
+      message.loading({ content: '图片已增强，正在解析', key: 'gallery-import', duration: 0 });
+      await handleFilesChange(files, 1, { analyze: true });
+      message.destroy('gallery-import');
+    } catch (err) {
+      message.destroy('gallery-import');
+      if (isUserCanceledNativePicker(err)) return;
+      logError('[platform.pickImages] error:', err);
+      message.error(err instanceof Error ? err.message : '相册导入失败，请重试');
     }
   }, [handleFilesChange, platform.files]);
 
@@ -231,6 +337,10 @@ const App: React.FC = () => {
             onPageChange={setCurrentPage}
             onTakePhoto={platform.files ? handleTakePhoto : undefined}
             onPickPlatformFiles={platform.files ? handlePickPlatformFiles : undefined}
+            onPickPlatformImages={platform.files ? handlePickPlatformImages : undefined}
+            onAnalyzeFiles={documentFiles.length > 0 ? handleAnalyzeCurrentFiles : undefined}
+            analyzing={analyzing}
+            qualityReports={preflightQuality}
           />
         </div>
       );
@@ -263,20 +373,20 @@ const App: React.FC = () => {
       style={{ display: 'flex', flexDirection: 'row' }}
     >
       <aside
-        className={`hidden h-screen flex-none flex-col bg-slate-950 text-slate-200 transition-[width] duration-200 md:flex ${
-          sidebarCollapsed ? 'w-[72px]' : 'w-[236px]'
+        className={`app-sidebar hidden h-screen flex-none flex-col text-slate-200 transition-[width] duration-200 md:flex ${
+          sidebarCollapsed ? 'w-[76px]' : 'w-[248px]'
         }`}
       >
         <div className={`border-b border-white/10 ${sidebarCollapsed ? 'px-3 py-4' : 'px-4 py-5'}`}>
           <div className={`flex items-center ${sidebarCollapsed ? 'flex-col gap-3' : 'justify-between gap-3'}`}>
             <div className={`flex min-w-0 items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-              <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-blue-600 text-lg text-white">
+              <div className="flex h-10 w-10 flex-none items-center justify-center rounded-lg bg-teal-500 text-lg text-white shadow-sm shadow-teal-950/20">
                 <FileDoneOutlined />
               </div>
               {!sidebarCollapsed && (
                 <div className="min-w-0">
-                  <div className="truncate text-base font-semibold text-white">天才群策·征信贷小帮</div>
-                  <div className="mt-0.5 text-xs text-slate-400">v1.6.0</div>
+                  <div className="truncate text-base font-semibold text-white">天才群策 · 征信贷小帮</div>
+                  <div className="mt-0.5 text-xs text-slate-400">Credit intelligence v1.6</div>
                 </div>
               )}
             </div>
@@ -305,7 +415,7 @@ const App: React.FC = () => {
                   sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3 text-left'
                 } ${
                   active
-                    ? 'bg-blue-600 text-white shadow-sm'
+                    ? 'bg-teal-500 text-white shadow-sm shadow-teal-950/20'
                     : disabled
                       ? 'text-slate-500'
                       : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -358,20 +468,19 @@ const App: React.FC = () => {
           className="app-header flex flex-none flex-col justify-center gap-3 border-b border-slate-200 px-3 py-3 md:flex-row md:items-center md:justify-between md:px-5 md:py-0"
           style={{ lineHeight: 'normal', background: '#ffffff' }}
         >
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-slate-500">客户</span>
-              <span className="text-base font-semibold text-slate-900">{report.header.name || '未识别客户'}</span>
+              <span className="app-header-kicker">客户档案</span>
+              <span className="max-w-full truncate text-lg font-semibold text-slate-950 md:max-w-[280px]">
+                {report.header.name || '未识别客户'}
+              </span>
               {report.header.certNo && <Tag color="blue">本人</Tag>}
-              {parseTag}
-              {reviewTag}
-              {configTag}
-            </div>
-            <div className="app-header-meta mt-1 flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-              <span>报告编号：{report.header.reportNo || '-'}</span>
-              <span>报告时间：{report.header.reportTime || '-'}</span>
-              <span>OCR/校验：{hasReport ? formatPercent(qualityScore) : '-'}</span>
-              <span>本月应还：{hasReport ? formatYuan(analysis.originalMonthlyPayment) : '-'}</span>
+              {(parseTag || reviewTag) && (
+                <span className="app-status-strip">
+                  {parseTag}
+                  {reviewTag}
+                </span>
+              )}
             </div>
           </div>
 
@@ -420,6 +529,13 @@ const App: React.FC = () => {
           onSuccess={() => { setSetupOpen(false); setKeysReady(true); }}
         />
       )}
+      <CameraCaptureModal
+        open={cameraOpen}
+        pageNumber={documentFiles.length + 1}
+        onCapture={handleCameraCapture}
+        onClose={() => setCameraOpen(false)}
+        onFallback={platform.files ? handleNativeTakePhoto : undefined}
+      />
     </Layout>
   );
 };
@@ -434,6 +550,27 @@ async function documentInputToFile(
     type: input.mimeType || 'image/jpeg',
     lastModified: Date.now(),
   });
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function isUserCanceledNativePicker(err: unknown): boolean {
+  return nativeErrorText(err).includes('cancel');
+}
+
+function nativeErrorText(err: unknown): string {
+  if (err instanceof Error) return `${err.name} ${err.message}`.toLowerCase();
+  if (typeof err === 'string') return err.toLowerCase();
+  if (!err || typeof err !== 'object') return '';
+  const payload = err as { code?: unknown; message?: unknown; errorMessage?: unknown };
+  return [payload.code, payload.message, payload.errorMessage]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
 }
 
 function base64ToBlob(base64: string, mimeType: string): Blob {

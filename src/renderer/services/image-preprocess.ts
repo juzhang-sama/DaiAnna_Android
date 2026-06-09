@@ -13,16 +13,44 @@ export interface PreprocessOptions {
   binaryThreshold: number;
   /** 是否用 Otsu 自动阈值替代固定阈值 */
   adaptiveThreshold: boolean;
+  /** 是否二值化。拍照预览/入库建议关闭，OCR 候选可开启 */
+  binarize: boolean;
   /** 是否启用去噪（中值滤波） */
   denoise: boolean;
+  /** 是否做阴影校正，适合暗光拍摄的纸质报告 */
+  shadowCorrection: boolean;
+  /** 锐化强度，0 = 不锐化 */
+  sharpen: number;
 }
 
 const DEFAULT_OPTIONS: PreprocessOptions = {
   contrast: 1.5,
   binaryThreshold: 160,
   adaptiveThreshold: false,
+  binarize: true,
   denoise: true,
+  shadowCorrection: false,
+  sharpen: 0,
 };
+
+export function preprocessCanvas(
+  source: HTMLCanvasElement,
+  options?: Partial<PreprocessOptions>,
+): HTMLCanvasElement {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Unable to preprocess image');
+  ctx.drawImage(source, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  applyPreprocessPipeline(imageData, opts);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
 
 /**
  * 对 base64 图片做预处理，返回处理后的 base64（不含 data: 前缀）
@@ -42,21 +70,33 @@ export async function preprocessImage(
   ctx.drawImage(img, 0, 0);
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-
-  applyGrayscale(data);
-  applyContrast(data, opts.contrast);
-  applyBinarize(data, opts.adaptiveThreshold ? calculateOtsuThreshold(data) : opts.binaryThreshold);
-
-  if (opts.denoise) {
-    applyMedianFilter(imageData);
-  }
+  applyPreprocessPipeline(imageData, opts);
 
   ctx.putImageData(imageData, 0, 0);
   return canvas.toDataURL('image/png').replace(/^data:image\/\w+;base64,/, '');
 }
 
 /** 加载 base64 为 HTMLImageElement */
+function applyPreprocessPipeline(imageData: ImageData, opts: PreprocessOptions): void {
+  const { data } = imageData;
+
+  applyGrayscale(data);
+  if (opts.shadowCorrection) {
+    applyShadowCorrection(data, imageData.width, imageData.height);
+  }
+  applyContrast(data, opts.contrast);
+  if (opts.sharpen > 0) {
+    applySharpen(data, imageData.width, imageData.height, opts.sharpen);
+  }
+  if (opts.binarize) {
+    applyBinarize(data, opts.adaptiveThreshold ? calculateOtsuThreshold(data) : opts.binaryThreshold);
+  }
+
+  if (opts.denoise) {
+    applyMedianFilter(imageData);
+  }
+}
+
 function loadImage(base64: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -81,6 +121,41 @@ function applyContrast(data: Uint8ClampedArray, factor: number): void {
     data[i] = clamp((data[i] - 128) * factor + 128);
     data[i + 1] = clamp((data[i + 1] - 128) * factor + 128);
     data[i + 2] = clamp((data[i + 2] - 128) * factor + 128);
+  }
+}
+
+function applyShadowCorrection(data: Uint8ClampedArray, width: number, height: number): void {
+  const gray = new Float32Array(width * height);
+  let sum = 0;
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = data[i];
+    sum += gray[p];
+  }
+
+  const background = boxBlur(gray, width, height, Math.max(12, Math.round(Math.min(width, height) * 0.025)));
+  const average = sum / Math.max(1, gray.length);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const value = clamp(gray[p] + (average - background[p]) * 0.7);
+    data[i] = data[i + 1] = data[i + 2] = value;
+  }
+}
+
+function applySharpen(data: Uint8ClampedArray, width: number, height: number, amount: number): void {
+  const copy = new Uint8ClampedArray(data);
+  const strength = Math.max(0, Math.min(0.8, amount));
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = (y * width + x) * 4;
+      const center = copy[idx];
+      const laplacian = 4 * center -
+        copy[idx - 4] -
+        copy[idx + 4] -
+        copy[idx - width * 4] -
+        copy[idx + width * 4];
+      const value = clamp(center + laplacian * strength);
+      data[idx] = data[idx + 1] = data[idx + 2] = value;
+    }
   }
 }
 
@@ -160,6 +235,44 @@ function getNeighborValues(
   return values;
 }
 
+function boxBlur(values: Float32Array, width: number, height: number, radius: number): Float32Array {
+  const temp = new Float32Array(values.length);
+  const output = new Float32Array(values.length);
+  const diameter = radius * 2 + 1;
+
+  for (let y = 0; y < height; y++) {
+    let sum = 0;
+    for (let dx = -radius; dx <= radius; dx++) {
+      sum += values[y * width + clampIndex(dx, 0, width - 1)];
+    }
+    for (let x = 0; x < width; x++) {
+      temp[y * width + x] = sum / diameter;
+      const removeX = clampIndex(x - radius, 0, width - 1);
+      const addX = clampIndex(x + radius + 1, 0, width - 1);
+      sum += values[y * width + addX] - values[y * width + removeX];
+    }
+  }
+
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      sum += temp[clampIndex(dy, 0, height - 1) * width + x];
+    }
+    for (let y = 0; y < height; y++) {
+      output[y * width + x] = sum / diameter;
+      const removeY = clampIndex(y - radius, 0, height - 1);
+      const addY = clampIndex(y + radius + 1, 0, height - 1);
+      sum += temp[addY * width + x] - temp[removeY * width + x];
+    }
+  }
+
+  return output;
+}
+
 function clamp(val: number): number {
   return Math.max(0, Math.min(255, Math.round(val)));
+}
+
+function clampIndex(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
 }

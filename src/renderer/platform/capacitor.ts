@@ -8,9 +8,10 @@ import {
 } from '@capacitor/camera';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { FilePicker, type PickedFile } from '@capawesome/capacitor-file-picker';
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { convertTextInResponse, type TextInResponse } from '../../shared/textin-doc-parser-adapter';
-import type { ApiKeys, ChatMessage, DocumentInput, PlatformAdapters, ShareFileDataInput } from './types';
+import type { ApiKeys, ChatMessage, DocumentInput, PickFilesOptions, PlatformAdapters, ShareFileDataInput } from './types';
 import type { DocParserResult } from '../../shared/doc-parser-types';
 
 const TEXTIN_PARSE_URL = 'https://api.textin.com/ai/service/v1/pdf_to_markdown';
@@ -23,6 +24,15 @@ const SECURE_STORAGE_PREFIX = 'loan-intelligence-parser_';
 const DOC_CACHE_DIR = 'doc-parser-cache';
 const EXPORT_DIR = 'exports';
 const DOC_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const FILE_PICKER_ACCEPTED_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/bmp',
+  'image/tiff',
+  'image/webp',
+];
+const MAX_PICKED_FILE_SIZE_BYTES = 30 * 1024 * 1024;
 
 let secureStorageReady: Promise<void> | null = null;
 
@@ -67,7 +77,7 @@ export function createCapacitorPlatform(): PlatformAdapters {
       },
     },
     files: {
-      pickFiles: pickGalleryImages,
+      pickFiles,
       takePhoto,
       readAsBase64,
     },
@@ -195,7 +205,32 @@ async function takePhoto(): Promise<DocumentInput> {
   return mediaResultToInput(photo, 'camera', 0);
 }
 
+async function pickFiles(options: PickFilesOptions = {}): Promise<DocumentInput[]> {
+  return options.source === 'images' ? pickGalleryImages() : pickDocumentFiles();
+}
+
+async function pickDocumentFiles(): Promise<DocumentInput[]> {
+  const result = await FilePicker.pickFiles({
+    types: FILE_PICKER_ACCEPTED_TYPES,
+    readData: true,
+  });
+  return result.files.map((item, index) => pickedFileToInput(item, 'file', index));
+}
+
 async function pickGalleryImages(): Promise<DocumentInput[]> {
+  try {
+    const result = await FilePicker.pickImages({
+      readData: false,
+      limit: 0,
+    });
+    return result.files.map((item, index) => pickedFileToInput(item, 'gallery', index));
+  } catch (err) {
+    if (isNativePickerCancel(err)) throw err;
+    return pickGalleryImagesViaCamera();
+  }
+}
+
+async function pickGalleryImagesViaCamera(): Promise<DocumentInput[]> {
   const result = await Camera.chooseFromGallery({
     mediaType: MediaTypeSelection.Photo,
     allowMultipleSelection: true,
@@ -211,9 +246,20 @@ async function readAsBase64(input: DocumentInput): Promise<string> {
   if (input.base64) return input.base64;
   if (!input.uri) throw new Error(`Document input ${input.id} does not have a uri`);
 
+  const fetched = await readUriViaFetch(input.uri).catch(() => null);
+  if (fetched) return fetched;
+
   const result = await Filesystem.readFile({ path: input.uri });
   if (typeof result.data === 'string') return stripDataUrlPrefix(result.data);
   return blobToBase64(result.data);
+}
+
+async function readUriViaFetch(uri: string): Promise<string> {
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`failed to read uri via fetch: ${response.status}`);
+  }
+  return blobToBase64(await response.blob());
 }
 
 function mediaResultToInput(
@@ -238,10 +284,78 @@ function mediaResultToInput(
   };
 }
 
+function pickedFileToInput(
+  file: PickedFile,
+  source: DocumentInput['source'],
+  index: number,
+): DocumentInput {
+  if (file.size > MAX_PICKED_FILE_SIZE_BYTES) {
+    throw new Error(`文件 ${file.name} 超过 30MB，请压缩后再导入`);
+  }
+
+  const mimeType = normalizeMimeType(file.mimeType, file.name);
+  const name = normalizePickedFileName(file.name, `${source}-${Date.now()}-${index}`, mimeType);
+  return {
+    id: `${source}-${Date.now()}-${index}`,
+    name,
+    mimeType,
+    size: file.size,
+    source,
+    uri: file.path,
+    base64: file.data ? stripDataUrlPrefix(file.data) : undefined,
+  };
+}
+
+function normalizeMimeType(mimeType: string | undefined, fileName: string): string {
+  if (mimeType) return mimeType;
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.pdf')) return 'application/pdf';
+  if (lowerName.endsWith('.png')) return 'image/png';
+  if (lowerName.endsWith('.webp')) return 'image/webp';
+  if (lowerName.endsWith('.bmp')) return 'image/bmp';
+  if (lowerName.endsWith('.tif') || lowerName.endsWith('.tiff')) return 'image/tiff';
+  return 'image/jpeg';
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  if (mimeType === 'application/pdf') return '.pdf';
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'image/bmp') return '.bmp';
+  if (mimeType === 'image/tiff') return '.tiff';
+  return '.jpg';
+}
+
+function normalizePickedFileName(fileName: string | undefined, fallbackBase: string, mimeType: string): string {
+  const safeName = fileName?.trim() || fallbackBase;
+  const lowerName = safeName.toLowerCase();
+  const hasKnownExtension = mimeType === 'application/pdf'
+    ? lowerName.endsWith('.pdf')
+    : IMAGE_EXTENSIONS_FOR_NAME.some((ext) => lowerName.endsWith(ext));
+  return hasKnownExtension ? safeName : `${safeName}${extensionFromMimeType(mimeType)}`;
+}
+
+const IMAGE_EXTENSIONS_FOR_NAME = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'];
+
 function normalizeImageFormat(format: string | undefined): string {
   if (!format) return 'jpg';
   const normalized = format.toLowerCase();
   return normalized === 'jpeg' ? 'jpg' : normalized;
+}
+
+function isNativePickerCancel(err: unknown): boolean {
+  return nativeErrorText(err).includes('cancel');
+}
+
+function nativeErrorText(err: unknown): string {
+  if (err instanceof Error) return `${err.name} ${err.message}`.toLowerCase();
+  if (typeof err === 'string') return err.toLowerCase();
+  if (!err || typeof err !== 'object') return '';
+  const payload = err as { code?: unknown; message?: unknown; errorMessage?: unknown };
+  return [payload.code, payload.message, payload.errorMessage]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
 }
 
 async function readDocCache(base64: string): Promise<DocParserResult | null> {

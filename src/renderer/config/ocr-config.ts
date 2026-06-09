@@ -6,6 +6,7 @@ export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif
 
 /** 判断文件是否为图片 */
 export function isImageFile(file: File): boolean {
+  if (file.type.toLowerCase().startsWith('image/')) return true;
   const name = file.name.toLowerCase();
   return IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext));
 }

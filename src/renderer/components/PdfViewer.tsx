@@ -13,14 +13,15 @@ import {
   RightOutlined,
   RotateRightOutlined,
   SafetyCertificateOutlined,
-  TableOutlined,
   UpOutlined,
   ZoomInOutlined,
   ZoomOutOutlined,
+  FullscreenOutlined,
 } from '@ant-design/icons';
 import * as pdfjsLib from 'pdfjs-dist';
 import { isImageFile, UPLOAD_ACCEPT } from '../config/ocr-config';
 import { logError } from '../utils/debug-log';
+import type { CaptureQualityResult } from '../services/capture-quality';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.mjs',
@@ -29,15 +30,19 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 interface PdfViewerProps {
   files: File[];
-  onFilesChange: (files: File[], preferredPage?: number) => void;
+  onFilesChange: (files: File[], preferredPage?: number, options?: { analyze?: boolean }) => void;
   currentPage: number;
   onPageChange: (page: number) => void;
   showImageOrderPanel?: boolean;
   onTakePhoto?: () => void;
   onPickPlatformFiles?: () => void;
+  onPickPlatformImages?: () => void;
+  onAnalyzeFiles?: () => void;
+  analyzing?: boolean;
+  qualityReports?: CaptureQualityResult[];
 }
 
-const MIN_SCALE = 0.5;
+const MIN_SCALE = 0.1;
 const MAX_SCALE = 3.0;
 const SCALE_STEP = 0.25;
 
@@ -54,6 +59,10 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
   showImageOrderPanel = true,
   onTakePhoto,
   onPickPlatformFiles,
+  onPickPlatformImages,
+  onAnalyzeFiles,
+  analyzing = false,
+  qualityReports = [],
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -76,6 +85,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
     ? files[currentPage - 1]?.name ?? files[0]?.name
     : firstFile?.name;
   const isQuarterTurn = currentRotation % 180 !== 0;
+  const preflightRejectCount = qualityReports.filter((item) => item.level === 'reject').length;
+  const preflightWarnCount = qualityReports.filter((item) => item.level === 'warn').length;
+  const preflightIssues = qualityReports.flatMap((item, index) => (
+    item.issues.slice(0, 2).map((issue) => `第 ${index + 1} 页：${issue}`)
+  ));
   const imageDisplaySize = imageNaturalSize
     ? {
         width: imageNaturalSize.width * scale,
@@ -95,7 +109,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
       window.clearTimeout(uploadTimer.current);
     }
     uploadTimer.current = window.setTimeout(() => {
-      onFilesChange(selectedFiles);
+      onFilesChange(selectedFiles, undefined, { analyze: true });
       uploadTimer.current = null;
     }, 0);
     return false;
@@ -206,6 +220,36 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
     }
   }, [currentPage, currentRotation, imageNaturalSize, isImageSet, isQuarterTurn, pdfDoc]);
 
+  const fitToPage = useCallback(async () => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth - 48;
+    const containerHeight = containerRef.current.clientHeight - 48;
+    if (containerWidth <= 0 || containerHeight <= 0) return;
+
+    if (isImageSet) {
+      if (!imageNaturalSize) return;
+      const pageWidth = isQuarterTurn ? imageNaturalSize.height : imageNaturalSize.width;
+      const pageHeight = isQuarterTurn ? imageNaturalSize.width : imageNaturalSize.height;
+      if (pageWidth > 0 && pageHeight > 0) {
+        const nextScale = Math.min(containerWidth / pageWidth, containerHeight / pageHeight);
+        setScale(Math.max(MIN_SCALE, Math.min(nextScale, MAX_SCALE)));
+      }
+      return;
+    }
+
+    if (!pdfDoc) return;
+    try {
+      const page = await pdfDoc.getPage(currentPage);
+      const viewport = page.getViewport({ scale: 1.0, rotation: currentRotation });
+      if (viewport.width > 0 && viewport.height > 0) {
+        const nextScale = Math.min(containerWidth / viewport.width, containerHeight / viewport.height);
+        setScale(Math.max(MIN_SCALE, Math.min(nextScale, MAX_SCALE)));
+      }
+    } catch (err) {
+      logError('fitToPage error:', err);
+    }
+  }, [currentPage, currentRotation, imageNaturalSize, isImageSet, isQuarterTurn, pdfDoc]);
+
   useEffect(() => {
     if (pdfDoc) {
       fitToWidth();
@@ -214,9 +258,9 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
 
   useEffect(() => {
     if (isImageSet && imageNaturalSize) {
-      fitToWidth();
+      fitToPage();
     }
-  }, [fitToWidth, imageNaturalSize, isImageSet]);
+  }, [fitToPage, imageNaturalSize, isImageSet]);
 
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
@@ -281,13 +325,13 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
     const nextFiles = [...files];
     const [item] = nextFiles.splice(index, 1);
     nextFiles.splice(target, 0, item);
-    onFilesChange(nextFiles, target + 1);
+    onFilesChange(nextFiles, target + 1, { analyze: false });
   };
 
   const removeImage = (index: number) => {
     const nextFiles = files.filter((_, fileIndex) => fileIndex !== index);
     const nextPage = Math.max(1, Math.min(currentPage, nextFiles.length));
-    onFilesChange(nextFiles, nextPage);
+    onFilesChange(nextFiles, nextPage, { analyze: false });
   };
 
   const imageSurfaceStyle: React.CSSProperties | undefined = currentImageUrl && imageSurfaceSize
@@ -312,50 +356,51 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
 
   if (files.length === 0) {
     return (
-      <div className="grid h-full min-h-0 grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-white p-3 sm:p-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid h-full min-h-0 grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex h-full min-h-0 flex-col">
-          <Upload.Dragger
-            accept={UPLOAD_ACCEPT}
-            multiple
-            showUploadList={false}
-            beforeUpload={scheduleUpload}
-            className="min-h-0 flex-1"
-            style={{ background: '#f8fafc', border: '1px dashed #94a3b8' }}
-          >
-            <div className="flex h-full min-h-[360px] flex-col items-center justify-center px-5 py-8 text-center sm:min-h-[520px] sm:px-8 sm:py-14">
-              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-3xl text-blue-600 sm:mb-6 sm:h-16 sm:w-16 sm:text-4xl">
-                <InboxOutlined />
-              </div>
-              <h1 className="m-0 text-xl font-semibold text-slate-950 sm:text-2xl">上传征信报告</h1>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
-                支持单个 PDF，或一次选择多张图片按页合并解析。解析完成后会自动进入债务分析与质量复核。
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2 sm:mt-8">
-                <Tag color="blue" icon={<FilePdfOutlined />}>PDF</Tag>
-                <Tag color="cyan" icon={<FileImageOutlined />}>图片组</Tag>
-                <Tag color="green" icon={<SafetyCertificateOutlined />}>质量复核</Tag>
-                <Tag color="purple" icon={<TableOutlined />}>结构化明细</Tag>
-              </div>
-              <Button type="primary" size="large" className="mt-7 w-full max-w-[220px] sm:mt-8">
-                选择文件
-              </Button>
-            </div>
-          </Upload.Dragger>
-
-          {(onTakePhoto || onPickPlatformFiles) && (
-            <div className="mt-3 flex w-full flex-col items-center justify-center gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+          <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
               {onTakePhoto && (
-                <Button className="w-full max-w-[220px] sm:w-auto" size="large" icon={<FileImageOutlined />} onClick={onTakePhoto}>
+              <Button className="home-action-button" type="primary" size="large" icon={<FileImageOutlined />} onClick={onTakePhoto}>
                   拍照解析
                 </Button>
               )}
-              {onPickPlatformFiles && (
-                <Button className="w-full max-w-[220px] sm:w-auto" size="large" icon={<FileImageOutlined />} onClick={onPickPlatformFiles}>
+            {onPickPlatformFiles ? (
+              <Button className="home-action-button" type="primary" size="large" icon={<FilePdfOutlined />} onClick={onPickPlatformFiles}>
+                  文件导入
+                </Button>
+            ) : (
+              <Upload className="home-action-upload" accept={UPLOAD_ACCEPT} multiple showUploadList={false} beforeUpload={scheduleUpload}>
+                <Button className="home-action-button" type="primary" size="large" icon={<FilePdfOutlined />}>
+                  文件导入
+                </Button>
+              </Upload>
+              )}
+              {onPickPlatformImages && (
+              <Button className="home-action-button" type="primary" size="large" icon={<FileImageOutlined />} onClick={onPickPlatformImages}>
                   相册导入
                 </Button>
               )}
             </div>
-          )}
+
+          <Upload.Dragger
+            accept={UPLOAD_ACCEPT}
+            multiple
+            openFileDialogOnClick={false}
+            showUploadList={false}
+            beforeUpload={scheduleUpload}
+            className="min-h-0 flex-1"
+            style={{ background: '#f8fafc', border: '1px dashed #99f6e4' }}
+          >
+            <div className="flex h-full min-h-[360px] flex-col items-center justify-center px-5 py-8 text-center sm:min-h-[520px] sm:px-8 sm:py-14">
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-lg bg-teal-50 text-3xl text-teal-600 sm:mb-6 sm:h-16 sm:w-16 sm:text-4xl">
+                <InboxOutlined />
+              </div>
+              <h1 className="m-0 text-xl font-semibold text-slate-950 sm:text-2xl">导入征信报告</h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
+                使用上方任一方式开始。也可以将 PDF 或图片直接拖放到此处。
+              </p>
+            </div>
+          </Upload.Dragger>
         </div>
 
         <aside className="hidden min-h-0 flex-col rounded-lg border border-slate-200 bg-slate-50 xl:flex">
@@ -392,11 +437,14 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex-none flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-white px-2 py-2 shadow-sm z-10 sm:gap-3 sm:px-3">
+      <div className="pdf-toolbar z-10 flex flex-none flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-2 py-2 shadow-sm sm:gap-3 sm:px-3">
         <Typography.Text className="min-w-[140px] max-w-sm flex-1 truncate text-sm font-medium text-gray-700" title={currentFileName}>
           {isImageSet && files.length > 1 ? `${files.length} 张图片 · ${currentFileName}` : currentFileName}
         </Typography.Text>
         <Space size="small" wrap>
+          <Tooltip title="适应整页">
+            <Button icon={<FullscreenOutlined />} onClick={fitToPage} />
+          </Tooltip>
           <Tooltip title="适应宽度">
             <Button icon={<ColumnWidthOutlined />} onClick={fitToWidth} />
           </Tooltip>
@@ -425,15 +473,72 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
         <Upload accept={UPLOAD_ACCEPT} multiple showUploadList={false} beforeUpload={scheduleUpload}>
           <Button type="primary" ghost>重新上传</Button>
         </Upload>
-        {(onTakePhoto || onPickPlatformFiles) && (
+        {onAnalyzeFiles && (
+          <Button
+            type="primary"
+            icon={<SafetyCertificateOutlined />}
+            onClick={onAnalyzeFiles}
+            loading={analyzing}
+            disabled={files.length === 0}
+          >
+            开始解析
+          </Button>
+        )}
+        {(onTakePhoto || onPickPlatformFiles || onPickPlatformImages) && (
           <Space size="small">
             {onTakePhoto && <Button onClick={onTakePhoto}>拍照</Button>}
-            {onPickPlatformFiles && <Button onClick={onPickPlatformFiles}>相册</Button>}
+            {onPickPlatformFiles && <Button onClick={onPickPlatformFiles}>文件</Button>}
+            {onPickPlatformImages && <Button onClick={onPickPlatformImages}>相册</Button>}
           </Space>
         )}
       </div>
 
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      {qualityReports.length > 0 && (
+        <div className="flex-none border-b border-slate-200 bg-white px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <Tag color={preflightRejectCount > 0 ? 'red' : preflightWarnCount > 0 ? 'orange' : 'green'}>
+              解析前质检：{qualityReports.length - preflightRejectCount - preflightWarnCount}/{qualityReports.length} 通过
+            </Tag>
+            {preflightRejectCount > 0 && <Tag color="red">{preflightRejectCount} 页建议重拍</Tag>}
+            {preflightWarnCount > 0 && <Tag color="orange">{preflightWarnCount} 页需确认</Tag>}
+            {preflightIssues.slice(0, 3).map((issue) => (
+              <span key={issue} className="rounded bg-slate-100 px-2 py-1">{issue}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showImageOrderPanel && isImageSet && files.length > 1 && (
+        <div className="flex-none overflow-x-auto border-b border-gray-200 bg-white px-2 py-2 lg:hidden">
+          <div className="flex gap-2">
+            {files.map((file, index) => (
+              <div
+                key={`${file.name}-${file.lastModified}-${index}`}
+                className={`flex w-36 flex-none items-center gap-2 rounded-md border p-2 ${
+                  currentPage === index + 1 ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'
+                }`}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => onPageChange(index + 1)}
+                  title={file.name}
+                >
+                  <div className="text-xs text-gray-500">第 {index + 1} 页</div>
+                  <div className="truncate text-xs text-gray-800">{file.name}</div>
+                </button>
+                <Space size={2}>
+                  <Button size="small" icon={<UpOutlined />} disabled={index === 0} onClick={() => moveImage(index, -1)} />
+                  <Button size="small" icon={<DownOutlined />} disabled={index === files.length - 1} onClick={() => moveImage(index, 1)} />
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeImage(index)} />
+                </Space>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {showImageOrderPanel && isImageSet && files.length > 1 && (
           <aside className="hidden w-56 flex-none overflow-auto border-r border-gray-200 bg-white lg:block">
             <div className="px-4 py-3 border-b border-gray-100">
@@ -474,9 +579,9 @@ const PdfViewer: React.FC<PdfViewerProps> = ({
           </aside>
         )}
 
-        <div ref={containerRef} className="flex-1 overflow-auto flex justify-center bg-gray-100 p-2 scroll-smooth sm:p-4">
+        <div ref={containerRef} className="flex flex-1 justify-center overflow-auto bg-slate-200 p-2 scroll-smooth sm:p-4">
           <div
-            className="shadow-lg min-h-[500px] flex items-center justify-center bg-white relative"
+            className="relative flex min-h-[500px] items-center justify-center bg-white shadow-lg ring-1 ring-slate-300/60"
             style={imageSurfaceStyle}
           >
             {pageRendering && (

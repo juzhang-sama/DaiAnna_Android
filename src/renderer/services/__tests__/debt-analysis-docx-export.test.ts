@@ -4,7 +4,7 @@ import {
   createEmptyCreditReport,
   type LoanAccount,
 } from '../../types/credit-report';
-import { buildDebtAnalysisDocxFiles } from '../debt-analysis-docx-export';
+import { buildDebtAnalysisDocxFileName, buildDebtAnalysisDocxFiles } from '../debt-analysis-docx-export';
 
 function makeLoan(partial: Partial<LoanAccount>): LoanAccount {
   return {
@@ -52,7 +52,7 @@ report.creditDetail.nonRevolvingLoans = [
 ];
 report.accountDerived.nonRevolvingLoan = {
   orgCount: 1,
-  accountCount: 4,
+  accountCount: 3,
   totalCredit: 1313868,
   balance: 1313868,
   monthlyPayment: 5197,
@@ -67,81 +67,36 @@ assert.ok(files['word/styles.xml']);
 
 const documentXml = strFromU8(files['word/document.xml']);
 
-assert.match(documentXml, /客户降低月供分析建议书/);
-assert.match(documentXml, /结论摘要/);
-assert.match(documentXml, /方向判断 \+ 保守区间/);
-assert.match(documentXml, /落地方案/);
-assert.match(documentXml, /执行前核验/);
-assert.match(documentXml, /数据依据与风险/);
+assert.match(documentXml, /测试客户-降低月供分析简版报告/);
+assert.match(documentXml, /声明：本报告仅为合法降低月供规划参考/);
+assert.match(documentXml, /1\. 债务清单明细/);
+assert.match(documentXml, /\(1\) 债务总额：1,313,868元（抓取征信报告中所有余额总和）/);
+assert.match(documentXml, /\(2\) 债务笔数：3笔/);
+assert.match(documentXml, /\(3\) 贷款余额：1,313,868元/);
+assert.match(documentXml, /\(4\) 信用卡已用：0元/);
+assert.match(documentXml, /2\. 符合条件的信用卡分期方案/);
+assert.match(documentXml, /经筛选，您当前持有的信用卡中无符合条件的可分期银行/);
+assert.match(documentXml, /3\. 月供方案对比/);
+assert.match(documentXml, /原月供总额为5,197元/);
+assert.match(documentXml, /方案类型/);
+assert.match(documentXml, /不影响征信方案/);
 assert.match(documentXml, /减轻影响征信方案/);
-assert.match(documentXml, /1,313,868 元/);
-assert.match(documentXml, /5,197 元/);
-assert.match(documentXml, /804-1,149 元/);
-assert.match(documentXml, /未复核/);
-assert.match(documentXml, /偏差超过 10%/);
-assert.match(documentXml, /不得以逃废债/);
-assert.doesNotMatch(documentXml, /债务类别/);
+assert.match(documentXml, /延长还款方案/);
+assert.match(documentXml, /全案定制方案/);
+assert.match(documentXml, /每月多出现金流（元）/);
+assert.match(documentXml, /方案说明与建议/);
+assert.match(documentXml, /报告生成时间：2026年04月28日/);
+assert.doesNotMatch(documentXml, /详细版|简要版|AI理财师执行策略|OCR数据底稿|风险边界/);
+assert.equal(buildDebtAnalysisDocxFileName(report), '测试客户-降低月供分析简版报告.docx');
 
-const aiFiles = buildDebtAnalysisDocxFiles(report, {
-  executiveSummary: '非房贷占比较高，应优先核查经营贷和消费贷的合同与还款节奏。',
-  primaryPressureSources: ['经营贷余额集中', '消费贷月供压力'],
-  priorityActions: [
-    {
-      priority: 1,
-      title: '核查经营贷',
-      reason: '经营贷余额集中',
-      action: '核对合同利率、剩余期数和续贷安排',
-      evidence: ['经营贷余额675,000元'],
-    },
-  ],
-  planComments: [
-    {
-      planKey: 'mild-negotiation',
-      planName: '减轻影响征信方案',
-      suitability: '适合作为主方案评估',
-      prerequisites: ['核实机构政策'],
-      cautions: ['可能体现账户调整信息'],
-    },
-  ],
-  executionSteps: ['核对账户明细', '拆分处理优先级'],
-  requiredMaterials: ['贷款合同', '近6个月流水'],
-  riskWarnings: ['不得承诺减免结果'],
+const optionalFiles = buildDebtAnalysisDocxFiles(report, {
+  executiveSummary: '不应写入导出文档',
+  primaryPressureSources: ['不应写入'],
+  priorityActions: [],
+  planComments: [],
+  executionSteps: [],
+  requiredMaterials: [],
+  riskWarnings: [],
 });
-
-const aiDocumentXml = strFromU8(aiFiles['word/document.xml']);
-assert.match(aiDocumentXml, /补充判断/);
-assert.match(aiDocumentXml, /核查经营贷/);
-assert.match(aiDocumentXml, /近 6 个月收入流水/);
-
-const reviewFiles = buildDebtAnalysisDocxFiles(report, undefined, {
-  reviewedIssueIds: ['账户数量:accountDerived.nonRevolvingLoan.accountCount:1'],
-  reviewedAt: '2026-06-06T12:00:00.000Z',
-}, {
-  images: [],
-  candidates: [],
-  validation: {
-    score: 1,
-    requiresReview: false,
-    summary: { critical: 0, warning: 0, info: 0 },
-    issues: [],
-  },
-  institutionCorrections: [
-    {
-      field: 'creditDetail.nonRevolvingLoans[0].org',
-      original: '测詴银行',
-      normalized: '测试银行',
-      confidence: 0.9,
-      matched: true,
-      applied: true,
-      status: 'matched',
-      statusLabel: '经机构库匹配',
-      matchType: 'fuzzy',
-      candidates: ['测试银行'],
-    },
-  ],
-});
-const reviewDocumentXml = strFromU8(reviewFiles['word/document.xml']);
-assert.match(reviewDocumentXml, /数据状态/);
-assert.match(reviewDocumentXml, /未复核字段/);
-assert.match(reviewDocumentXml, /数据依据与风险/);
-assert.doesNotMatch(reviewDocumentXml, /机构库匹配记录/);
+const optionalDocumentXml = strFromU8(optionalFiles['word/document.xml']);
+assert.doesNotMatch(optionalDocumentXml, /不应写入导出文档/);

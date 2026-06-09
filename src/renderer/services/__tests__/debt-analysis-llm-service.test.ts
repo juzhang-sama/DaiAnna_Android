@@ -55,6 +55,12 @@ const prompt = buildDebtAnalysisPrompt(analysis);
 
 assert.match(prompt, /债务总额/);
 assert.match(prompt, /方案测算/);
+assert.match(prompt, /OCR解析/);
+assert.match(prompt, /专业理财师/);
+assert.match(prompt, /落地方案/);
+assert.match(prompt, /优化负债结构/);
+assert.match(prompt, /单版Word策略报告/);
+assert.match(prompt, /语言精炼/);
 assert.match(prompt, /所有数字都必须沿用输入/);
 
 const parsed = parseDebtAnalysisLlmJson(`\`\`\`json

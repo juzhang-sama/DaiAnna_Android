@@ -21,8 +21,12 @@ export interface DocumentInput {
   base64?: string;
 }
 
+export interface PickFilesOptions {
+  source?: 'documents' | 'images';
+}
+
 export interface PlatformFileAdapter {
-  pickFiles(): Promise<DocumentInput[]>;
+  pickFiles(options?: PickFilesOptions): Promise<DocumentInput[]>;
   takePhoto(): Promise<DocumentInput>;
   readAsBase64(input: DocumentInput): Promise<string>;
 }

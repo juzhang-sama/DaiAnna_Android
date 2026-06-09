@@ -66,6 +66,7 @@
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/share": "^8.0.1",
+    "@capawesome/capacitor-file-picker": "^8.0.2",
     "antd": "^6.3.0",
     "fflate": "^0.8.3",
     "lowdb": "^7.0.1",

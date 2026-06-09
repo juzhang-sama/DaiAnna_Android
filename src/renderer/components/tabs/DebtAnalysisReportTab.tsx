@@ -121,7 +121,12 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
     try {
       const fileName = buildDebtAnalysisDocxFileName(report);
       if (platform.kind === 'capacitor' && platform.share?.shareFileData) {
-        const base64 = buildDebtAnalysisDocxBase64(report, aiAnalysis ?? undefined, reviewState, diagnostics);
+        const base64 = buildDebtAnalysisDocxBase64(
+          report,
+          undefined,
+          reviewState,
+          diagnostics,
+        );
         await platform.share.shareFileData({
           fileName,
           mimeType: DEBT_ANALYSIS_DOCX_MIME_TYPE,
@@ -129,16 +134,16 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
         });
         message.success('已打开系统分享');
       } else {
-        exportDebtAnalysisReportToDocx(report, fileName, aiAnalysis ?? undefined, reviewState, diagnostics);
+        exportDebtAnalysisReportToDocx(report, fileName, undefined, reviewState, diagnostics);
         message.success('分析报告已导出');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Word 报告导出失败';
+      const msg = err instanceof Error ? err.message : 'Word 方案导出失败';
       message.error(msg);
     } finally {
       setExportingDocx(false);
     }
-  }, [aiAnalysis, canExport, diagnostics, exportingDocx, platform, readiness, report, reviewState]);
+  }, [canExport, diagnostics, exportingDocx, platform, readiness, report, reviewState]);
 
   const handleAiAnalysis = useCallback(async () => {
     if (!canExport) {
@@ -154,7 +159,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
     try {
       const result = await getProfessionalDebtAnalysis(analysis);
       setAiAnalysis(result);
-      message.success('AI 专业分析已生成');
+      message.success('AI 落地策略已生成');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI 分析失败';
       setAiError(msg);
@@ -341,19 +346,19 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
             <Button
               icon={<RobotOutlined />}
               onClick={handleAiAnalysis}
-              disabled={!canRunAnalysisActions}
+              disabled={!canRunAnalysisActions || exportingDocx}
               loading={aiLoading}
             >
-              AI 专业分析
+              AI 落地策略
             </Button>
             <Button
               type="primary"
               icon={<DownloadOutlined />}
               onClick={handleExportDocx}
-              disabled={!canRunAnalysisActions}
+              disabled={!canRunAnalysisActions || exportingDocx}
               loading={exportingDocx}
             >
-              导出建议书
+              导出报告
             </Button>
           </div>
         </div>
@@ -446,7 +451,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
                   disabled={!canRunAnalysisActions}
                   loading={aiLoading}
                 >
-                  生成专业分析
+                  生成落地策略
                 </Button>
               </div>
             )}
@@ -548,7 +553,7 @@ const AnalysisReadinessAlert: React.FC<{ readiness: AnalysisReadiness }> = ({ re
       description={
         <div className="space-y-2">
           <div>
-            已暂缓 AI 专业分析和 Word 导出。请先在“解析质量”页或明细页核对金额、账户状态和账户数量，避免错误数据进入后续报告。
+            已暂缓 AI 落地策略和 Word 导出。请先在“解析质量”页或明细页核对金额、账户状态和账户数量，避免错误数据进入后续方案。
           </div>
           <div className="space-y-1">
             {readiness.displayIssues.map((issue) => (

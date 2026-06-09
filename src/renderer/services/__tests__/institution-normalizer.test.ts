@@ -119,6 +119,10 @@ const ccbBranch = normalizeInstitutionName('中国建设银行股份有限公司
 assert.equal(ccbBranch.matched, true);
 assert.equal(ccbBranch.normalized, '中国建设银行股份有限公司');
 
+const ccbBrokenBranch = normalizeInstitutionName('中国建设银行股份支行');
+assert.equal(ccbBrokenBranch.matched, true);
+assert.equal(ccbBrokenBranch.normalized, '中国建设银行股份有限公司');
+
 const cebCardCenter = normalizeInstitutionName('中国光大银行股份有限公司信用卡中');
 assert.equal(cebCardCenter.matched, true);
 assert.equal(cebCardCenter.normalized, '中国光大银行股份有限公司');

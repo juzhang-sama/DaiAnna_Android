@@ -37,6 +37,12 @@ function formatPercent(score: number): number {
   return Math.round(score * 100);
 }
 
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '-';
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${Math.round(bytes / 1024)}KB`;
+}
+
 function getScoreStatus(score: number): 'success' | 'normal' | 'exception' {
   if (score >= 0.9) return 'success';
   if (score >= 0.75) return 'normal';
@@ -179,7 +185,9 @@ const ReviewOverview: React.FC<{
     .map(({ id }) => id);
   const unreviewedIds = [...unreviewedValidationIds, ...unreviewedInstitutionIds];
   const institutionReviewCount = unreviewedInstitutionIds.length;
-  const imageIssueCount = (diagnostics?.images ?? []).reduce((count, item) => count + item.issues.length, 0);
+  const imageIssueCount =
+    (diagnostics?.images ?? []).reduce((count, item) => count + item.issues.length, 0) +
+    (diagnostics?.processing ?? []).reduce((count, item) => count + item.issues.length, 0);
   const status = getOverviewStatus(validation, unreviewedIds.length, institutionReviewCount, pendingCriticalCount);
 
   return (
@@ -330,6 +338,16 @@ function renderDiagnostics(
     key: index,
     ...item,
     size: `${item.width}×${item.height}`,
+    issueText: item.issues.join('；') || '-',
+  }));
+
+  const processingRows = (diagnostics.processing ?? []).map((item, index) => ({
+    key: index,
+    ...item,
+    size: `${item.originalWidth}x${item.originalHeight} -> ${item.outputWidth}x${item.outputHeight}`,
+    fileSize: `${formatBytes(item.originalBytes)} -> ${formatBytes(item.outputBytes)}`,
+    strategyText: item.strategy === 'scan-corrected' ? '裁切矫正' : '保底增强',
+    detectedText: item.detected ? '已检测' : '未检测',
     issueText: item.issues.join('；') || '-',
   }));
 
@@ -553,6 +571,37 @@ function renderDiagnostics(
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Surface title="图片输入质量" subtitle="分辨率、清晰度与预处理提示">
+          {processingRows.length > 0 && (
+            <Table
+              className="mb-3"
+              dataSource={processingRows}
+              size="small"
+              pagination={false}
+              scroll={{ x: 1060 }}
+              columns={[
+                { title: '导入处理', dataIndex: 'strategyText', key: 'strategyText', width: 96 },
+                { title: '纸张', dataIndex: 'detectedText', key: 'detectedText', width: 82 },
+                { title: '尺寸', dataIndex: 'size', key: 'size', width: 190 },
+                { title: '体积', dataIndex: 'fileSize', key: 'fileSize', width: 145 },
+                {
+                  title: '扫描分',
+                  dataIndex: 'scanScore',
+                  key: 'scanScore',
+                  width: 86,
+                  render: (score: number) => <Tag color={score >= 78 ? 'green' : score >= 55 ? 'gold' : 'red'}>{score}</Tag>,
+                },
+                {
+                  title: '输出分',
+                  dataIndex: 'outputQualityScore',
+                  key: 'outputQualityScore',
+                  width: 86,
+                  render: (score: number) => <Tag color={score >= 85 ? 'green' : score >= 70 ? 'gold' : 'red'}>{score}</Tag>,
+                },
+                { title: '清晰度', dataIndex: 'outputSharpness', key: 'outputSharpness', width: 82 },
+                { title: '提示', dataIndex: 'issueText', key: 'issueText' },
+              ]}
+            />
+          )}
           <Table
             dataSource={imageRows}
             size="small"

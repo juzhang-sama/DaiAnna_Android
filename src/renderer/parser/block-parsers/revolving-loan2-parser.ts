@@ -35,8 +35,16 @@ function hasEmptyOffset(headers: string[]): boolean {
   return headers.length >= 24 && headers[0]?.trim() === '';
 }
 
-/** 从 row[4]+row[5] 提取账户状态（在贷/结清） */
 function extractStatus(rows: string[][], offset: number): string {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    if (!row.some(c => c.includes('状态'))) continue;
+    const valueRow = rows[i + 1] ?? [];
+    const idx = row.findIndex(c => c.includes('账户状态') || c.includes('状态'));
+    const raw = valueRow[idx] ?? valueRow[0] ?? row[idx] ?? '';
+    return raw || '结清';
+  }
+
   const labelRow = rows[4] ?? [];
   const valueRow = rows[5] ?? [];
   // 在贷：row[4] 含 "账户状态"
@@ -107,8 +115,14 @@ function extractFromTable(ct: ContextTable): RevolvingLoanAccount {
   fiveCategory = getLabeledValue(lr2, vr2, '五级分类', GS) || null;
 
   if (!isClosed) {
-    balance = parseNum(getLabeledValue(lr2, vr2, '余额', GS));
-    remainTerms = parseNum(getLabeledValue(lr2, vr2, '剩余还款期数', GS)) || null;
+    balance = parseNum(
+      findTableValueByLabels(ct.table, ['余额', '佘额'], 'amount') ||
+      getLabeledValue(lr2, vr2, '余额', GS),
+    );
+    remainTerms = parseNum(
+      findTableValueByLabels(ct.table, ['剩余还款期数', '剩余期数', '剩余还款'], 'amount') ||
+      getLabeledValue(lr2, vr2, '剩余还款期数', GS),
+    ) || null;
     monthlyPayment = parseNum(
       findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount') ||
       getLabeledValue(lr2, vr2, '本月应还款', GS),

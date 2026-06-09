@@ -5,29 +5,65 @@ import {
   type DebtAnalysisReport,
   type PaymentReductionPlan,
 } from './debt-analysis-report';
-import type { LlmDebtAnalysis, LlmPriorityAction } from './debt-analysis-llm-service';
-import {
-  buildOcrReviewExportSummary,
-  type OcrReviewExportSummary,
-} from './ocr-review-export';
+import type { LlmDebtAnalysis } from './debt-analysis-llm-service';
 import type { OcrDiagnosticsReport, OcrReviewState } from '../types/ocr-diagnostics';
 
 type DocxFiles = Record<string, Uint8Array>;
+type Align = 'left' | 'center' | 'right';
+type ParagraphStyle = 'Title' | 'Heading1' | 'Normal';
+
+interface ParagraphOptions {
+  style?: ParagraphStyle;
+  align?: Align;
+  bold?: boolean;
+  size?: number;
+}
+
+interface TableCell {
+  text: string;
+  align?: Align;
+  bold?: boolean;
+  fill?: string;
+  width?: number;
+}
+
+type TableCellInput = string | TableCell;
 
 export const DEBT_ANALYSIS_DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+const TABLE_WIDTH = 9600;
+const TARGET_INSTALLMENT_BANKS = '广发银行、招商银行、民生银行、广州银行、平安银行、光大银行、华夏银行';
+
+const PLAN_LABELS: Record<string, string> = {
+  'normal-optimization': '不影响征信方案',
+  'mild-negotiation': '减轻影响征信方案',
+  'term-extension': '延长还款方案',
+  'high-risk-resolution': '全案定制方案',
+};
+
+const PLAN_ADVANTAGES: Record<string, string> = {
+  'normal-optimization':
+    '优势：1. 征信零损伤，不逾期、不上负面记录、不新增不良信息，不影响后续房贷、车贷、信用卡及其他贷款办理。优势：2. 还款压力直接降低，快速缓解每月资金压力，避免以贷养贷，稳住现金流。劣势：无',
+  'mild-negotiation':
+    '优势：缓解当前压力，提前递交书面情况，告知银行未能按时还款原因，争取机会。劣势：还款期间无法再申请新贷款，征信会显示关注/止付/展期/纾困',
+  'term-extension':
+    '优势：1. 停止利息和违约金滚动，债务不再越还越多，避免以贷养贷。优势：2. 可分最长60期还款，大幅降低每月月供压力。优势：3. 避免催收、起诉、执行，影响家人。优势：4. 有明确还款计划，能逐步结清债务，翻身上岸。劣势：还款期间无法再申请新贷款，征信会显示逾期',
+  'high-risk-resolution':
+    '优势：1. 不用再为债务发愁。优势：2. 可安心工作，专心赚钱。优势：3. 90%债务会转卖三方，折扣结清所有债务，根据经验90%情况下最高4折左右可结清。劣势：1. 征信结清时恢复。劣势：2. 10%的概率可能会被起诉。',
+};
+
 export function exportDebtAnalysisReportToDocx(
   report: CreditReport,
-  fileName: string = buildDefaultFileName(report),
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewState?: OcrReviewState,
-  diagnostics?: OcrDiagnosticsReport,
+  fileName?: string,
+  _aiAnalysis?: LlmDebtAnalysis,
+  _reviewState?: OcrReviewState,
+  _diagnostics?: OcrDiagnosticsReport,
 ): void {
-  const blob = buildDebtAnalysisDocxBlob(report, aiAnalysis, reviewState, diagnostics);
+  const blob = buildDebtAnalysisDocxBlob(report);
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = ensureDocxExtension(fileName);
+  link.download = ensureDocxExtension(fileName ?? buildDefaultFileName(report));
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -38,20 +74,20 @@ export function buildDebtAnalysisDocxFileName(report: CreditReport): string {
 
 export function buildDebtAnalysisDocxBytes(
   report: CreditReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewState?: OcrReviewState,
-  diagnostics?: OcrDiagnosticsReport,
+  _aiAnalysis?: LlmDebtAnalysis,
+  _reviewState?: OcrReviewState,
+  _diagnostics?: OcrDiagnosticsReport,
 ): Uint8Array {
-  return zipSync(buildDebtAnalysisDocxFiles(report, aiAnalysis, reviewState, diagnostics), { level: 6 });
+  return zipSync(buildDebtAnalysisDocxFiles(report), { level: 6 });
 }
 
 export function buildDebtAnalysisDocxBlob(
   report: CreditReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewState?: OcrReviewState,
-  diagnostics?: OcrDiagnosticsReport,
+  _aiAnalysis?: LlmDebtAnalysis,
+  _reviewState?: OcrReviewState,
+  _diagnostics?: OcrDiagnosticsReport,
 ): Blob {
-  const bytes = buildDebtAnalysisDocxBytes(report, aiAnalysis, reviewState, diagnostics);
+  const bytes = buildDebtAnalysisDocxBytes(report);
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return new Blob([arrayBuffer], {
     type: DEBT_ANALYSIS_DOCX_MIME_TYPE,
@@ -60,55 +96,54 @@ export function buildDebtAnalysisDocxBlob(
 
 export function buildDebtAnalysisDocxBase64(
   report: CreditReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewState?: OcrReviewState,
-  diagnostics?: OcrDiagnosticsReport,
+  _aiAnalysis?: LlmDebtAnalysis,
+  _reviewState?: OcrReviewState,
+  _diagnostics?: OcrDiagnosticsReport,
 ): string {
-  return uint8ArrayToBase64(buildDebtAnalysisDocxBytes(report, aiAnalysis, reviewState, diagnostics));
+  return uint8ArrayToBase64(buildDebtAnalysisDocxBytes(report));
 }
 
 export function buildDebtAnalysisDocxFiles(
   report: CreditReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewState?: OcrReviewState,
-  diagnostics?: OcrDiagnosticsReport,
+  _aiAnalysis?: LlmDebtAnalysis,
+  _reviewState?: OcrReviewState,
+  _diagnostics?: OcrDiagnosticsReport,
 ): DocxFiles {
   const analysis = buildDebtAnalysisReport(report);
-  const reviewSummary = buildOcrReviewExportSummary(report, reviewState, diagnostics?.institutionCorrections);
   return {
     '[Content_Types].xml': strToU8(buildContentTypesXml()),
     '_rels/.rels': strToU8(buildRootRelsXml()),
     'docProps/core.xml': strToU8(buildCorePropsXml(analysis)),
     'docProps/app.xml': strToU8(buildAppPropsXml()),
-    'word/document.xml': strToU8(buildDebtAnalysisDocumentXml(analysis, aiAnalysis, reviewSummary)),
+    'word/document.xml': strToU8(buildDebtAnalysisDocumentXml(analysis)),
     'word/styles.xml': strToU8(buildStylesXml()),
     'word/_rels/document.xml.rels': strToU8(buildDocumentRelsXml()),
   };
 }
 
-export function buildDebtAnalysisDocumentXml(
-  analysis: DebtAnalysisReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewSummary?: OcrReviewExportSummary,
-): string {
+export function buildDebtAnalysisDocumentXml(analysis: DebtAnalysisReport): string {
   const body = [
-    paragraph('客户降低月供分析建议书', { style: 'Title', align: 'center' }),
-    paragraph(`客户姓名：${analysis.customerName || '-'}    报告时间：${analysis.reportTime || '-'}    生成时间：${formatDateTime(analysis.generatedAt)}`, { style: 'Small' }),
-    paragraph('本建议书基于征信 OCR 结构化数据生成。由于 OCR、账户状态、机构政策和客户实际流水都可能存在偏差，以下结论按“方向判断 + 保守区间”使用，不把单个测算数字视为承诺结果。执行前必须核对原始征信、合同、账单和收入流水。', { style: 'Note' }),
-
-    heading('一、结论摘要'),
-    ...buildConciseConclusionBody(analysis, aiAnalysis, reviewSummary),
-
-    heading('二、落地方案'),
-    ...buildLandingPlanBody(analysis, aiAnalysis),
-
-    heading('三、执行前核验'),
-    ...buildVerificationBody(analysis, reviewSummary),
-
-    heading('四、数据依据与风险'),
-    ...buildDataAndRiskBody(analysis, aiAnalysis, reviewSummary),
-
-    paragraph('报告生成完毕。', { style: 'Small', align: 'right' }),
+    paragraph(buildReportTitle(analysis), { style: 'Title', align: 'center' }),
+    buildDeclarationTable(),
+    paragraph('1. 债务清单明细', { style: 'Heading1' }),
+    paragraph(`(1) 债务总额：${formatYuan(analysis.debtTotal)}（抓取征信报告中所有余额总和）`),
+    paragraph(`(2) 债务笔数：${analysis.debtCount}笔（所有账户状态显示“正常”且有余额的账户数量）`),
+    paragraph(`(3) 贷款余额：${formatYuan(analysis.totalLoanBalance)}（抓取所有在用贷款的“余额”总和）`),
+    paragraph(
+      `(4) 信用卡已用：${formatYuan(analysis.totalCardUsed)}（抓取所有在用信用卡的“已用额度”总和，${buildCardUsedNote(analysis.totalCardUsed)}）`,
+    ),
+    paragraph('2. 符合条件的信用卡分期方案', { style: 'Heading1' }),
+    paragraph(buildInstallmentCardText(analysis)),
+    paragraph('3. 月供方案对比', { style: 'Heading1' }),
+    paragraph(
+      `原月供计算：根据征信报告中所有账户本月应还款总和计算，原月供总额为${formatYuan(analysis.originalMonthlyPayment)}。`,
+    ),
+    buildPlanComparisonTable(analysis.plans),
+    paragraph('方案说明与建议', { style: 'Heading1' }),
+    paragraph(
+      '上述为您出具的专属解决方案，具体执行细节建议当面沟通确认。操作全程遵循相关政策要求，次月即可实现还款金额下调，多出现金流、减轻生活负担，且不影响个人征信记录。',
+    ),
+    paragraph(`报告生成时间：${formatChineseDate(analysis.reportTime || analysis.generatedAt)}`),
     sectionProperties(),
   ].join('');
 
@@ -117,218 +152,136 @@ export function buildDebtAnalysisDocumentXml(
 </w:document>`);
 }
 
-function buildConciseConclusionBody(
-  analysis: DebtAnalysisReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewSummary?: OcrReviewExportSummary,
-): string[] {
-  const mainPlan = pickMainPlan(analysis);
-  const leadingDebt = getLeadingDebt(analysis);
-  const highestPayment = getHighestPayment(analysis);
-  const dataConfidence = reviewSummary && reviewSummary.pendingCount > 0
-    ? `当前仍有 ${reviewSummary.pendingCount} 项字段未复核，建议先按保守口径执行。`
-    : '当前数据可作为初步判断依据，但仍需用合同、账单和流水做最终确认。';
-
-  return [
-    bullet(`当前识别月供约 ${formatYuan(analysis.originalMonthlyPayment)}，目标不是追求一次性最低月供，而是先降低短期压力并保持征信连续性。`),
-    leadingDebt ? bullet(`余额主要集中在${leadingDebt.label}，约 ${formatYuan(leadingDebt.balance)}，占比 ${formatRatio(leadingDebt.balanceShare)}。`) : '',
-    highestPayment ? bullet(`月供压力优先看${highestPayment.label}，约 ${formatYuan(highestPayment.monthlyPayment)}，占比 ${formatRatio(highestPayment.paymentShare)}。`) : '',
-    mainPlan
-      ? bullet(`主方案建议采用“${mainPlan.name}”：不要按单点值承诺，建议按保守释放区间 ${formatYuanRange(mainPlan.releasedCashFlow)} 制定预算。`)
-      : bullet('暂未形成可测算主方案，先补齐合同、账单和流水后再判断。'),
-    bullet(dataConfidence),
-    ...(aiAnalysis?.executiveSummary ? [bullet(`补充判断：${aiAnalysis.executiveSummary}`)] : []),
-  ].filter(Boolean);
+function buildReportTitle(analysis: DebtAnalysisReport): string {
+  const name = analysis.customerName.trim() || '客户';
+  return `${name}-降低月供分析简版报告`;
 }
 
-function buildLandingPlanBody(
-  analysis: DebtAnalysisReport,
-  aiAnalysis?: LlmDebtAnalysis,
-): string[] {
-  const mainPlan = pickMainPlan(analysis);
-  const actions = aiAnalysis?.priorityActions.length
-    ? aiAnalysis.priorityActions.slice(0, 2)
-    : buildRuleBasedPriorityActions(analysis).slice(0, 3);
+function buildDeclarationTable(): string {
+  return table([
+    [
+      {
+        text: '声明：本报告仅为合法降低月供规划参考，所有方案均符合现行法律法规及监管政策，无任何教唆逃废债内容。',
+        fill: 'EAF2FF',
+        bold: true,
+      },
+    ],
+  ], [TABLE_WIDTH]);
+}
 
-  return [
-    mainPlan
-      ? paragraph(`主推：${mainPlan.name}`, { style: 'Heading2' })
-      : paragraph('主推：先补齐资料后再定方案', { style: 'Heading2' }),
-    mainPlan
-      ? bullet(`预算口径：测算释放 ${formatYuan(mainPlan.releasedCashFlow)}，实际执行建议按 ${formatYuanRange(mainPlan.releasedCashFlow)} 预留容错。`)
-      : bullet('当前月供或余额数据不足，不建议直接给客户承诺压降金额。'),
-    ...actions.map((action) => bullet(`${action.priority}. ${action.title}：${action.action}`)),
-    bullet('和机构沟通时只确认五件事：能否调整、调整后月供、总成本变化、征信展示方式、是否需要补充材料。'),
-    bullet('落地顺序建议：先处理月供最高且可沟通空间最大的账户，再处理信用卡账单和还款日节奏。'),
-    bullet('高风险处置、重组或展期只作为备选，不作为首推；没有书面规则前，不向客户承诺结果。'),
+function buildCardUsedNote(totalCardUsed: number): string {
+  if (Math.round(totalCardUsed) <= 0) return '当前所有信用卡已用额度为0';
+  return `当前信用卡已用额度为${formatYuan(totalCardUsed)}`;
+}
+
+function buildInstallmentCardText(analysis: DebtAnalysisReport): string {
+  if (analysis.installmentCards.length === 0) {
+    return `经筛选，您当前持有的信用卡中无符合条件的可分期银行（${TARGET_INSTALLMENT_BANKS}）信用卡账户。`;
+  }
+
+  const cards = analysis.installmentCards.map((card) => card.org).join('、');
+  return `经筛选，您当前持有的信用卡中符合条件的可分期银行账户为：${cards}。`;
+}
+
+function buildPlanComparisonTable(plans: PaymentReductionPlan[]): string {
+  const planOrder = ['normal-optimization', 'mild-negotiation', 'term-extension', 'high-risk-resolution'];
+  const orderedPlans = planOrder
+    .map((key) => plans.find((plan) => plan.key === key))
+    .filter((plan): plan is PaymentReductionPlan => Boolean(plan));
+
+  const rows: TableCellInput[][] = [
+    [
+      { text: '方案类型', bold: true, align: 'center', fill: 'D9EAF7' },
+      { text: '原月供（元）', bold: true, align: 'center', fill: 'D9EAF7' },
+      { text: '降低后月供（元）', bold: true, align: 'center', fill: 'D9EAF7' },
+      { text: '每月多出现金流（元）', bold: true, align: 'center', fill: 'D9EAF7' },
+      { text: '优劣势', bold: true, align: 'center', fill: 'D9EAF7' },
+    ],
+    ...orderedPlans.map<TableCellInput[]>((plan) => [
+      PLAN_LABELS[plan.key] ?? plan.name,
+      { text: formatTableNumber(plan.originalMonthlyPayment), align: 'center' },
+      { text: formatTableNumber(plan.targetMonthlyPayment), align: 'center' },
+      { text: formatTableNumber(plan.releasedCashFlow), align: 'center' },
+      PLAN_ADVANTAGES[plan.key] ?? buildFallbackPlanNote(plan),
+    ]),
   ];
+
+  return table(rows, [1500, 1400, 1700, 1900, 3100]);
 }
 
-function buildVerificationBody(
-  analysis: DebtAnalysisReport,
-  reviewSummary?: OcrReviewExportSummary,
-): string[] {
-  return [
-    bullet('先核对原始征信：账户状态、余额、本月应还、逾期信息、信用卡已用额度。'),
-    bullet('再核对机构资料：贷款合同、还款计划、信用卡账单、可分期规则、是否有提前还款或展期费用。'),
-    bullet('最后核对客户现金流：近 6 个月收入流水、固定支出、现有还款日和实际可承受月供。'),
-    reviewSummary
-      ? bullet(`复核提醒：系统识别出需复核字段 ${reviewSummary.totalReviewable} 项，其中未复核 ${reviewSummary.pendingCount} 项。`)
-      : bullet('复核提醒：当前未附加 OCR 复核摘要，建议人工抽查关键金额。'),
-    bullet('如果核对后关键金额或月供偏差超过 10%，本建议书只能作为方向参考，需要重新生成方案。'),
-  ];
+function buildFallbackPlanNote(plan: PaymentReductionPlan): string {
+  const advantages = plan.advantages.length ? plan.advantages.join('；') : '需结合合同与账单确认';
+  const risks = plan.risks.length ? plan.risks.join('；') : '需执行前复核';
+  return `优势：${advantages}。劣势：${risks}`;
 }
 
-function buildRuleBasedPriorityActions(analysis: DebtAnalysisReport): LlmPriorityAction[] {
-  const actions: LlmPriorityAction[] = [];
-  const highestPayment = getHighestPayment(analysis);
-
-  if (analysis.metrics.overdueAccountCount > 0) {
-    actions.push({
-      priority: actions.length + 1,
-      title: '先处理当前逾期和状态异常账户',
-      reason: '逾期会显著影响后续协商空间和征信判断。',
-      action: '核对逾期账户、逾期金额、是否已还清以及征信更新时间，先做止损和状态修复。',
-      evidence: [`当前逾期账户数：${analysis.metrics.overdueAccountCount} 个`],
-    });
-  }
-
-  if (highestPayment && highestPayment.monthlyPayment > 0) {
-    actions.push({
-      priority: actions.length + 1,
-      title: `优先压降${highestPayment.label}月供`,
-      reason: `${highestPayment.label}是当前月供压力最高的类别，优先处理更容易看到现金流改善。`,
-      action: `核查${highestPayment.label}的合同利率、剩余期数、还款方式、账单日和机构调整政策。`,
-      evidence: [`${highestPayment.label}月供：${formatYuan(highestPayment.monthlyPayment)}`],
-    });
-  }
-
-  if ((analysis.metrics.nonMortgageDebtShare ?? 0) >= 0.6) {
-    actions.push({
-      priority: actions.length + 1,
-      title: '拆分非房贷债务做分层处理',
-      reason: '非房贷通常期限更短、月供压力更直接，是降月供方案的主要调节区。',
-      action: '把经营贷、消费贷、车贷、信用卡分别列出，按月供金额和调整难度排序沟通。',
-      evidence: [
-        `非房贷余额占比：${formatRatio(analysis.metrics.nonMortgageDebtShare)}`,
-        `非房贷月供：${formatYuan(analysis.metrics.nonMortgagePayment)}`,
-      ],
-    });
-  }
-
-  if (analysis.installmentCards.length > 0) {
-    actions.push({
-      priority: actions.length + 1,
-      title: '核查信用卡账单分期空间',
-      reason: '信用卡已用额度可通过账单分期、还款日安排等方式改善短期月供节奏。',
-      action: '补充信用卡账单、账单日、还款日、可分期期数和手续费率，再决定是否纳入主方案。',
-      evidence: [`可核查信用卡账户：${analysis.installmentCards.length} 个`],
-    });
-  }
-
-  if (actions.length === 0) {
-    actions.push({
-      priority: 1,
-      title: '先补齐合同与流水资料',
-      reason: '当前征信结构未显示明显单一压降对象，需要结合实际合同和收入流水判断。',
-      action: '补充贷款合同、还款计划、信用卡账单、近 6 个月收入流水和客户月度支出清单。',
-      evidence: ['当前未触发明显结构集中、信用卡使用率或逾期类预警。'],
-    });
-  }
-
-  return actions.slice(0, 5).map((item, index) => ({ ...item, priority: index + 1 }));
+function table(rows: TableCellInput[][], widths: number[]): string {
+  return `<w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="${TABLE_WIDTH}" w:type="dxa"/>
+      <w:tblBorders>
+        <w:top w:val="single" w:sz="8" w:space="0" w:color="7F7F7F"/>
+        <w:left w:val="single" w:sz="8" w:space="0" w:color="7F7F7F"/>
+        <w:bottom w:val="single" w:sz="8" w:space="0" w:color="7F7F7F"/>
+        <w:right w:val="single" w:sz="8" w:space="0" w:color="7F7F7F"/>
+        <w:insideH w:val="single" w:sz="6" w:space="0" w:color="BFBFBF"/>
+        <w:insideV w:val="single" w:sz="6" w:space="0" w:color="BFBFBF"/>
+      </w:tblBorders>
+      <w:tblCellMar>
+        <w:top w:w="120" w:type="dxa"/>
+        <w:left w:w="120" w:type="dxa"/>
+        <w:bottom w:w="120" w:type="dxa"/>
+        <w:right w:w="120" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>
+    ${rows.map((row) => tableRow(row, widths)).join('')}
+  </w:tbl>`;
 }
 
-function buildDataAndRiskBody(
-  analysis: DebtAnalysisReport,
-  aiAnalysis?: LlmDebtAnalysis,
-  reviewSummary?: OcrReviewExportSummary,
-): string[] {
-  const mainPlan = pickMainPlan(analysis);
-  const topDebts = [...analysis.debtBreakdown]
-    .filter((item) => item.balance > 0 || item.monthlyPayment > 0)
-    .sort((a, b) => b.monthlyPayment - a.monthlyPayment)
-    .slice(0, 2);
-  const riskWarnings = dedupe([
-    ...analysis.riskNotes,
-    ...(aiAnalysis?.riskWarnings ?? []),
-  ]).slice(0, 3);
-
-  return [
-    bullet(`关键数据：债务总额约 ${formatYuan(analysis.debtTotal)}，当前月供约 ${formatYuan(analysis.originalMonthlyPayment)}，非房贷占比 ${formatRatio(analysis.metrics.nonMortgageDebtShare)}。`),
-    ...topDebts.map((item) => bullet(`${item.label}：余额约 ${formatYuan(item.balance)}，月供约 ${formatYuan(item.monthlyPayment)}。`)),
-    mainPlan ? bullet(`方案预算：按 ${formatYuanRange(mainPlan.releasedCashFlow)} 作为可释放现金流的保守参考，先用低值安排客户预算。`) : '',
-    reviewSummary ? bullet(`数据状态：未复核字段 ${reviewSummary.pendingCount} 项，建议先复核后执行。`) : '',
-    ...riskWarnings.map((item) => bullet(item)),
-    bullet('不得以逃废债、虚假沟通、隐瞒收入或伪造资料作为降低月供手段。'),
-  ].filter(Boolean);
+function tableRow(row: TableCellInput[], widths: number[]): string {
+  return `<w:tr>${row.map((cell, index) => tableCell(cell, widths[index] ?? widths[widths.length - 1] ?? TABLE_WIDTH)).join('')}</w:tr>`;
 }
 
-function pickMainPlan(analysis: DebtAnalysisReport): PaymentReductionPlan | undefined {
-  const normal = analysis.plans.find((plan) => plan.key === 'normal-optimization');
-  const mild = analysis.plans.find((plan) => plan.key === 'mild-negotiation');
-  const term = analysis.plans.find((plan) => plan.key === 'term-extension');
-  const meaningfulRelief = Math.max(800, analysis.originalMonthlyPayment * 0.1);
-
-  if (normal && normal.releasedCashFlow >= meaningfulRelief) return normal;
-  if (mild && mild.releasedCashFlow > 0) return mild;
-  if (normal && normal.releasedCashFlow > 0) return normal;
-  if (term && term.releasedCashFlow > 0) return term;
-  return analysis.plans.find((plan) => plan.releasedCashFlow > 0) ?? analysis.plans[0];
+function tableCell(input: TableCellInput, width: number): string {
+  const cell: TableCell = typeof input === 'string' ? { text: input } : input;
+  const fill = cell.fill ? `<w:shd w:fill="${cell.fill}"/>` : '';
+  return `<w:tc>
+    <w:tcPr>
+      <w:tcW w:w="${cell.width ?? width}" w:type="dxa"/>
+      <w:vAlign w:val="center"/>
+      ${fill}
+    </w:tcPr>
+    ${paragraph(cell.text, { align: cell.align, bold: cell.bold, size: 20 })}
+  </w:tc>`;
 }
 
-function getLeadingDebt(analysis: DebtAnalysisReport) {
-  return [...analysis.debtBreakdown]
-    .filter((item) => item.balance > 0)
-    .sort((a, b) => b.balance - a.balance)[0];
-}
-
-function getHighestPayment(analysis: DebtAnalysisReport) {
-  return [...analysis.debtBreakdown]
-    .filter((item) => item.monthlyPayment > 0)
-    .sort((a, b) => b.monthlyPayment - a.monthlyPayment)[0];
-}
-
-function dedupe(items: string[]): string[] {
-  return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
-}
-
-function buildDefaultFileName(report: CreditReport): string {
-  const name = sanitizeFileName(report.header.name || '客户');
-  const reportTime = sanitizeFileName(report.header.reportTime || new Date().toISOString().slice(0, 10));
-  return `${name}_降低月供分析建议书_${reportTime}.docx`;
-}
-
-function ensureDocxExtension(fileName: string): string {
-  return fileName.endsWith('.docx') ? fileName : `${fileName}.docx`;
-}
-
-function heading(text: string): string {
-  return paragraph(text, { style: 'Heading1' });
-}
-
-function bullet(text: string): string {
-  return `<w:p>
-  <w:pPr><w:pStyle w:val="ListParagraph"/><w:ind w:left="420" w:hanging="180"/></w:pPr>
-  <w:r><w:t>${escapeXml(`• ${text}`)}</w:t></w:r>
-</w:p>`;
-}
-
-function paragraph(
-  text: string,
-  options: { style?: 'Title' | 'Heading1' | 'Heading2' | 'Note' | 'Small'; align?: 'center' | 'right' } = {},
-): string {
+function paragraph(text: string, options: ParagraphOptions = {}): string {
   const style = options.style ? `<w:pStyle w:val="${options.style}"/>` : '';
   const align = options.align ? `<w:jc w:val="${options.align}"/>` : '';
-  const pPr = style || align ? `<w:pPr>${style}${align}</w:pPr>` : '';
-  return `<w:p>${pPr}<w:r><w:t>${escapeXml(text)}</w:t></w:r></w:p>`;
+  const spacing = options.style === 'Title'
+    ? '<w:spacing w:before="120" w:after="260"/>'
+    : options.style === 'Heading1'
+      ? '<w:spacing w:before="220" w:after="120"/>'
+      : '<w:spacing w:before="0" w:after="80" w:line="360" w:lineRule="auto"/>';
+  const runProps = runProperties({ bold: options.bold, size: options.size });
+
+  return `<w:p>
+    <w:pPr>${style}${align}${spacing}</w:pPr>
+    <w:r>${runProps}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>
+  </w:p>`;
+}
+
+function runProperties(options: { bold?: boolean; size?: number } = {}): string {
+  const bold = options.bold ? '<w:b/>' : '';
+  const size = options.size ? `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>` : '';
+  return `<w:rPr><w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/>${bold}${size}</w:rPr>`;
 }
 
 function sectionProperties(): string {
   return `<w:sectPr>
-  <w:pgSz w:w="11906" w:h="16838"/>
-  <w:pgMar w:top="1440" w:right="1080" w:bottom="1440" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>
-</w:sectPr>`;
+    <w:pgSz w:w="11906" w:h="16838"/>
+    <w:pgMar w:top="1100" w:right="950" w:bottom="950" w:left="950" w:header="708" w:footer="708" w:gutter="0"/>
+  </w:sectPr>`;
 }
 
 function buildContentTypesXml(): string {
@@ -351,108 +304,151 @@ function buildRootRelsXml(): string {
 }
 
 function buildDocumentRelsXml(): string {
-  return xmlDeclaration(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`);
+  return xmlDeclaration(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`);
 }
 
 function buildCorePropsXml(analysis: DebtAnalysisReport): string {
-  const now = analysis.generatedAt;
-  return xmlDeclaration(`<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>客户降低月供分析建议书</dc:title>
-  <dc:creator>征信贷小帮</dc:creator>
-  <cp:lastModifiedBy>征信贷小帮</cp:lastModifiedBy>
-  <dcterms:created xsi:type="dcterms:W3CDTF">${escapeXml(now)}</dcterms:created>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">${escapeXml(now)}</dcterms:modified>
+  const now = new Date().toISOString();
+  const title = buildReportTitle(analysis);
+  return xmlDeclaration(`<cp:coreProperties
+  xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:dcmitype="http://purl.org/dc/dcmitype/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${escapeXml(title)}</dc:title>
+  <dc:creator>LoanIntelligence Parser</dc:creator>
+  <cp:lastModifiedBy>LoanIntelligence Parser</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
 </cp:coreProperties>`);
 }
 
 function buildAppPropsXml(): string {
-  return xmlDeclaration(`<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>征信贷小帮</Application>
+  return xmlDeclaration(`<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+  xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>LoanIntelligence Parser</Application>
+  <DocSecurity>0</DocSecurity>
+  <ScaleCrop>false</ScaleCrop>
+  <HeadingPairs>
+    <vt:vector size="2" baseType="variant">
+      <vt:variant><vt:lpstr>Title</vt:lpstr></vt:variant>
+      <vt:variant><vt:i4>1</vt:i4></vt:variant>
+    </vt:vector>
+  </HeadingPairs>
+  <TitlesOfParts>
+    <vt:vector size="1" baseType="lpstr">
+      <vt:lpstr>降低月供分析简版报告</vt:lpstr>
+    </vt:vector>
+  </TitlesOfParts>
+  <Company></Company>
+  <LinksUpToDate>false</LinksUpToDate>
+  <SharedDoc>false</SharedDoc>
+  <HyperlinksChanged>false</HyperlinksChanged>
+  <AppVersion>16.0000</AppVersion>
 </Properties>`);
 }
 
 function buildStylesXml(): string {
   return xmlDeclaration(`<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/>
+        <w:sz w:val="21"/>
+        <w:szCs w:val="21"/>
+        <w:color w:val="111827"/>
+      </w:rPr>
+    </w:rPrDefault>
+    <w:pPrDefault>
+      <w:pPr>
+        <w:spacing w:after="80" w:line="360" w:lineRule="auto"/>
+      </w:pPr>
+    </w:pPrDefault>
+  </w:docDefaults>
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
     <w:name w:val="Normal"/>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="SimSun" w:hAnsi="Arial"/><w:sz w:val="21"/></w:rPr>
+    <w:qFormat/>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Title">
     <w:name w:val="Title"/>
-    <w:pPr><w:spacing w:after="240"/></w:pPr>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei" w:hAnsi="Arial"/><w:b/><w:sz w:val="34"/></w:rPr>
+    <w:basedOn w:val="Normal"/>
+    <w:qFormat/>
+    <w:rPr>
+      <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/>
+      <w:b/>
+      <w:sz w:val="34"/>
+      <w:szCs w:val="34"/>
+    </w:rPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Heading1">
     <w:name w:val="heading 1"/>
-    <w:pPr><w:spacing w:before="260" w:after="140"/></w:pPr>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei" w:hAnsi="Arial"/><w:b/><w:sz w:val="26"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading2">
-    <w:name w:val="heading 2"/>
-    <w:pPr><w:spacing w:before="180" w:after="100"/></w:pPr>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei" w:hAnsi="Arial"/><w:b/><w:sz w:val="22"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Note">
-    <w:name w:val="Note"/>
-    <w:pPr><w:spacing w:after="160"/></w:pPr>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="SimSun" w:hAnsi="Arial"/><w:color w:val="666666"/><w:sz w:val="20"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Small">
-    <w:name w:val="Small"/>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="SimSun" w:hAnsi="Arial"/><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="ListParagraph">
-    <w:name w:val="List Paragraph"/>
-    <w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="SimSun" w:hAnsi="Arial"/><w:sz w:val="21"/></w:rPr>
-  </w:style>
-  <w:style w:type="table" w:styleId="TableGrid">
-    <w:name w:val="Table Grid"/>
-    <w:tblPr><w:tblBorders>
-      <w:top w:val="single" w:sz="4" w:color="BFBFBF"/>
-      <w:left w:val="single" w:sz="4" w:color="BFBFBF"/>
-      <w:bottom w:val="single" w:sz="4" w:color="BFBFBF"/>
-      <w:right w:val="single" w:sz="4" w:color="BFBFBF"/>
-      <w:insideH w:val="single" w:sz="4" w:color="BFBFBF"/>
-      <w:insideV w:val="single" w:sz="4" w:color="BFBFBF"/>
-    </w:tblBorders></w:tblPr>
+    <w:basedOn w:val="Normal"/>
+    <w:qFormat/>
+    <w:rPr>
+      <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/>
+      <w:b/>
+      <w:sz w:val="24"/>
+      <w:szCs w:val="24"/>
+    </w:rPr>
   </w:style>
 </w:styles>`);
 }
 
-function formatYuan(value: number): string {
-  return `${Math.round(value).toLocaleString('zh-CN')} 元`;
+function buildDefaultFileName(report: CreditReport): string {
+  const analysis = buildDebtAnalysisReport(report);
+  const name = sanitizeFileName(analysis.customerName || '客户');
+  return `${name}-降低月供分析简版报告.docx`;
 }
 
-function formatYuanRange(value: number): string {
-  const amount = Math.max(0, Math.round(value));
-  if (amount <= 0) return '暂无法估算';
-  const lower = Math.round(amount * 0.7);
-  return `${lower.toLocaleString('zh-CN')}-${amount.toLocaleString('zh-CN')} 元`;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', { hour12: false });
-}
-
-function formatRatio(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '-';
-  return `${Math.round(value * 1000) / 10}%`;
+function ensureDocxExtension(fileName: string): string {
+  return fileName.toLowerCase().endsWith('.docx') ? fileName : `${fileName}.docx`;
 }
 
 function sanitizeFileName(value: string): string {
-  return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || '客户';
+  return value.replace(/[\\/:*?"<>|]/g, '').trim() || '客户';
+}
+
+function formatYuan(value: number): string {
+  return `${formatTableNumber(value)}元`;
+}
+
+function formatTableNumber(value: number): string {
+  return Math.round(value || 0).toLocaleString('zh-CN');
+}
+
+function formatChineseDate(value: string): string {
+  const normalized = value.trim();
+  const match = normalized.match(/(\d{4})[.\-/年](\d{1,2})[.\-/月](\d{1,2})/);
+  if (match) {
+    const [, year, month, day] = match;
+    return `${year}年${month.padStart(2, '0')}月${day.padStart(2, '0')}日`;
+  }
+
+  const date = new Date(normalized);
+  if (!Number.isNaN(date.getTime())) {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, '0');
+    const day = `${date.getDate()}`.padStart(2, '0');
+    return `${year}年${month}月${day}日`;
+  }
+
+  return normalized || formatChineseDate(new Date().toISOString());
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
   return btoa(binary);
+}
+
+function xmlDeclaration(content: string): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${content}`;
 }
 
 function escapeXml(value: string): string {
@@ -462,8 +458,4 @@ function escapeXml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
-}
-
-function xmlDeclaration(body: string): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${body}`;
 }
