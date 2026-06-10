@@ -8,6 +8,7 @@ import type { AccountBrief } from '../../types/credit-report';
 import type { ContextTable } from '../doc-table-bridge';
 import { groupAccountTables, isAccountSummaryTable, type AccountCategory } from '../doc-table-bridge';
 import { findTableValueByLabels } from './loan-table-utils';
+import { isActiveCreditCardStatus, normalizeCreditCardStatus } from '../../utils/credit-card-status';
 
 /** 类别中文标签映射 */
 const CATEGORY_LABELS: Record<AccountCategory, string> = {
@@ -48,8 +49,10 @@ function extractBriefFromTable(
 
   const org = findTableValueByLabels(t, isCreditCard ? '发卡机构' : '管理机构');
   const openDate = findTableValueByLabels(t, '开立日期', 'date');
-  const status = findTableValueByLabels(t, '账户状态');
-  const isClosed = /结清|销户/.test(status);
+  const currency = isCreditCard ? findTableValueByLabels(t, '币种') : '';
+  const rawStatus = findTableValueByLabels(t, '账户状态');
+  const status = isCreditCard ? normalizeCreditCardStatus(rawStatus, currency) : rawStatus;
+  const isClosed = isCreditCard ? !isActiveCreditCardStatus(status) : /结清|销户/.test(status);
 
   const creditLabel = isCreditCard ? '授信额度' : '借款金额';
   const balanceLabel = isCreditCard ? '已用额度' : '余额';

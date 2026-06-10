@@ -24,6 +24,7 @@ import {
   cleanOrg, cleanStatus, cleanNumStr, tryMergeSplitTable,
   parseRepaymentRecords, findTableValueByLabels, mergeSegmentTablesForParsing,
 } from './loan-table-utils';
+import { isActiveCreditCardStatus, normalizeCreditCardStatus } from '../../utils/credit-card-status';
 
 const GS = 1;
 
@@ -190,15 +191,17 @@ function extractFromTable(ct: ContextTable): CreditCardAccount {
   if (creditLimit > 0 && creditLimit < 100 && fallbackCreditLimit > creditLimit) {
     creditLimit = fallbackCreditLimit;
   }
-  const status = extractStatus(ct.table);
-  const isClosed = /结清|销户|未激活/.test(status);
-  const usedAmount = isClosed ? null : extractUsedAmount(ct.table);
-  const billDate = isClosed ? null : findTableValueByLabels(ct.table, '账单日', 'date') || null;
-  const monthlyPaymentRaw = isClosed ? '' :
-    findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount');
-  const actualPaymentRaw = isClosed ? '' : findTableValueByLabels(ct.table, '本月实还款', 'amount');
-  const currentOverdueCountRaw = isClosed ? '' : findTableValueByLabels(ct.table, '当前逾期期数', 'amount');
-  const currentOverdueAmountRaw = isClosed ? '' : findTableValueByLabels(ct.table, '当前逾期总额', 'amount');
+  const currency = findTableValueByLabels(ct.table, '币种');
+  const status = normalizeCreditCardStatus(extractStatus(ct.table), currency);
+  const isActive = isActiveCreditCardStatus(status);
+  const usedAmount = isActive ? extractUsedAmount(ct.table) : null;
+  const billDate = isActive ? findTableValueByLabels(ct.table, '账单日', 'date') || null : null;
+  const monthlyPaymentRaw = isActive
+    ? findTableValueByLabels(ct.table, ['本月应还款', '本月应还', '应还款额', '本期应还'], 'amount')
+    : '';
+  const actualPaymentRaw = isActive ? findTableValueByLabels(ct.table, '本月实还款', 'amount') : '';
+  const currentOverdueCountRaw = isActive ? findTableValueByLabels(ct.table, '当前逾期期数', 'amount') : '';
+  const currentOverdueAmountRaw = isActive ? findTableValueByLabels(ct.table, '当前逾期总额', 'amount') : '';
   const sharedCreditLimitRaw = findTableValueByLabels(ct.table, '共享授信额度', 'amount');
 
   return {
@@ -207,7 +210,7 @@ function extractFromTable(ct: ContextTable): CreditCardAccount {
     openDate,
     creditLimit,
     sharedCreditLimit: sharedCreditLimitRaw ? parseNum(sharedCreditLimitRaw) : null,
-    currency: findTableValueByLabels(ct.table, '币种'),
+    currency,
     businessType: findTableValueByLabels(ct.table, '业务种类'),
     guaranteeType: findTableValueByLabels(ct.table, '担保方式'),
     status,
@@ -220,7 +223,7 @@ function extractFromTable(ct: ContextTable): CreditCardAccount {
     billDate,
     monthlyPayment: monthlyPaymentRaw ? parseNum(monthlyPaymentRaw) : null,
     actualPayment: actualPaymentRaw ? parseNum(actualPaymentRaw) : null,
-    lastPaymentDate: isClosed ? null : findTableValueByLabels(ct.table, '最近一次还款日期', 'date') || null,
+    lastPaymentDate: isActive ? findTableValueByLabels(ct.table, '最近一次还款日期', 'date') || null : null,
     currentOverdueCount: currentOverdueCountRaw ? parseNum(currentOverdueCountRaw) : null,
     currentOverdueAmount: currentOverdueAmountRaw ? parseNum(currentOverdueAmountRaw) : null,
     largeInstallmentInfo: null,

@@ -4,6 +4,7 @@ import type {
   LoanAccount,
   RevolvingLoanAccount,
 } from '../types/credit-report';
+import { isActiveCreditCardStatus } from '../utils/credit-card-status';
 
 export type DebtCategory = 'mortgage' | 'business' | 'consumer' | 'auto' | 'other' | 'creditCard';
 
@@ -138,13 +139,17 @@ export function buildDebtAnalysisReport(report: CreditReport): DebtAnalysisRepor
   }
 
   for (const card of report.creditDetail.creditCards) {
-    if (!isActiveDebt(card.status, card.usedAmount, card.monthlyPayment)) continue;
     const usedAmount = card.usedAmount ?? card.balance ?? 0;
+    if (!isActiveCreditCardDebt(card, usedAmount)) continue;
     addToBucket(buckets.creditCard, usedAmount, card.monthlyPayment ?? 0);
     installmentCards.push(buildInstallmentCard(card, installmentCards.length));
   }
 
-  if (buckets.creditCard.balance === 0 && report.accountDerived.creditCard?.balance) {
+  if (
+    report.creditDetail.creditCards.length === 0
+    && buckets.creditCard.balance === 0
+    && report.accountDerived.creditCard?.balance
+  ) {
     const derivedCard = report.accountDerived.creditCard;
     buckets.creditCard.count = derivedCard.accountCount;
     buckets.creditCard.balance = derivedCard.balance;
@@ -218,6 +223,14 @@ function isActiveDebt(status: string, amount?: number | null, monthlyPayment?: n
   if (CLOSED_STATUS_RE.test(status)) return false;
   if (debtAmount > 0 || payment > 0) return true;
   return NORMAL_STATUS_RE.test(status);
+}
+
+function isActiveCreditCardDebt(
+  card: CreditCardAccount,
+  usedAmount: number,
+): boolean {
+  if (!isActiveCreditCardStatus(card.status)) return false;
+  return sanitizeAmount(usedAmount) > 0 || sanitizeAmount(card.monthlyPayment ?? 0) > 0;
 }
 
 function classifyLoan(businessType: string): DebtCategory {
@@ -420,7 +433,7 @@ function sumDerivedLoan(report: CreditReport): Pick<DebtBreakdownItem, 'count' |
 
 function calcTotalCardLimit(cards: CreditCardAccount[]): number {
   return cards
-    .filter((card) => !CLOSED_STATUS_RE.test(card.status))
+    .filter((card) => isActiveCreditCardStatus(card.status))
     .reduce((sum, card) => sum + sanitizeAmount(card.creditLimit), 0);
 }
 
@@ -432,8 +445,10 @@ function calcOriginalMonthlyPayment(report: CreditReport, breakdown: DebtBreakdo
     report.accountDerived.nonRevolvingLoan,
     report.accountDerived.revolvingLoan1,
     report.accountDerived.revolvingLoan2,
-    report.accountDerived.creditCard,
   ];
+  if (report.creditDetail.creditCards.length === 0) {
+    summaries.push(report.accountDerived.creditCard);
+  }
   return Math.round(summaries.reduce((sum, item) => sum + sanitizeAmount(item?.monthlyPayment ?? 0), 0));
 }
 

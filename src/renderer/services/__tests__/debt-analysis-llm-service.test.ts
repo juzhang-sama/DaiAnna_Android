@@ -62,11 +62,13 @@ assert.match(prompt, /优化负债结构/);
 assert.match(prompt, /单版Word策略报告/);
 assert.match(prompt, /语言精炼/);
 assert.match(prompt, /所有数字都必须沿用输入/);
+assert.match(prompt, /可分期信用卡清单/);
 
 const parsed = parseDebtAnalysisLlmJson(`\`\`\`json
 {
   "executiveSummary": "非房贷占比较高，应优先拆解经营贷和消费贷压力来源。",
   "primaryPressureSources": ["经营贷余额高", "消费贷月供高"],
+  "installmentCardAnalysis": "未识别到可直接分期的信用卡已用额度，应补充账单核验。",
   "priorityActions": [
     {
       "priority": 1,
@@ -92,6 +94,7 @@ const parsed = parseDebtAnalysisLlmJson(`\`\`\`json
 
 assert.equal(parsed.executiveSummary.includes('非房贷'), true);
 assert.equal(parsed.primaryPressureSources.length, 2);
+assert.equal(parsed.installmentCardAnalysis.includes('信用卡'), true);
 assert.equal(parsed.priorityActions[0].priority, 1);
 assert.equal(parsed.priorityActions[0].evidence[0], '经营贷余额675,000元');
 assert.equal(parsed.planComments[0].planName, '减轻影响征信方案');

@@ -55,11 +55,11 @@ const PLAN_ADVANTAGES: Record<string, string> = {
 export function exportDebtAnalysisReportToDocx(
   report: CreditReport,
   fileName?: string,
-  _aiAnalysis?: LlmDebtAnalysis,
-  _reviewState?: OcrReviewState,
-  _diagnostics?: OcrDiagnosticsReport,
+  aiAnalysis?: LlmDebtAnalysis,
+  reviewState?: OcrReviewState,
+  diagnostics?: OcrDiagnosticsReport,
 ): void {
-  const blob = buildDebtAnalysisDocxBlob(report);
+  const blob = buildDebtAnalysisDocxBlob(report, aiAnalysis, reviewState, diagnostics);
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -74,20 +74,20 @@ export function buildDebtAnalysisDocxFileName(report: CreditReport): string {
 
 export function buildDebtAnalysisDocxBytes(
   report: CreditReport,
-  _aiAnalysis?: LlmDebtAnalysis,
-  _reviewState?: OcrReviewState,
-  _diagnostics?: OcrDiagnosticsReport,
+  aiAnalysis?: LlmDebtAnalysis,
+  reviewState?: OcrReviewState,
+  diagnostics?: OcrDiagnosticsReport,
 ): Uint8Array {
-  return zipSync(buildDebtAnalysisDocxFiles(report), { level: 6 });
+  return zipSync(buildDebtAnalysisDocxFiles(report, aiAnalysis, reviewState, diagnostics), { level: 6 });
 }
 
 export function buildDebtAnalysisDocxBlob(
   report: CreditReport,
-  _aiAnalysis?: LlmDebtAnalysis,
-  _reviewState?: OcrReviewState,
-  _diagnostics?: OcrDiagnosticsReport,
+  aiAnalysis?: LlmDebtAnalysis,
+  reviewState?: OcrReviewState,
+  diagnostics?: OcrDiagnosticsReport,
 ): Blob {
-  const bytes = buildDebtAnalysisDocxBytes(report);
+  const bytes = buildDebtAnalysisDocxBytes(report, aiAnalysis, reviewState, diagnostics);
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return new Blob([arrayBuffer], {
     type: DEBT_ANALYSIS_DOCX_MIME_TYPE,
@@ -96,16 +96,16 @@ export function buildDebtAnalysisDocxBlob(
 
 export function buildDebtAnalysisDocxBase64(
   report: CreditReport,
-  _aiAnalysis?: LlmDebtAnalysis,
-  _reviewState?: OcrReviewState,
-  _diagnostics?: OcrDiagnosticsReport,
+  aiAnalysis?: LlmDebtAnalysis,
+  reviewState?: OcrReviewState,
+  diagnostics?: OcrDiagnosticsReport,
 ): string {
-  return uint8ArrayToBase64(buildDebtAnalysisDocxBytes(report));
+  return uint8ArrayToBase64(buildDebtAnalysisDocxBytes(report, aiAnalysis, reviewState, diagnostics));
 }
 
 export function buildDebtAnalysisDocxFiles(
   report: CreditReport,
-  _aiAnalysis?: LlmDebtAnalysis,
+  aiAnalysis?: LlmDebtAnalysis,
   _reviewState?: OcrReviewState,
   _diagnostics?: OcrDiagnosticsReport,
 ): DocxFiles {
@@ -115,13 +115,13 @@ export function buildDebtAnalysisDocxFiles(
     '_rels/.rels': strToU8(buildRootRelsXml()),
     'docProps/core.xml': strToU8(buildCorePropsXml(analysis)),
     'docProps/app.xml': strToU8(buildAppPropsXml()),
-    'word/document.xml': strToU8(buildDebtAnalysisDocumentXml(analysis)),
+    'word/document.xml': strToU8(buildDebtAnalysisDocumentXml(analysis, aiAnalysis)),
     'word/styles.xml': strToU8(buildStylesXml()),
     'word/_rels/document.xml.rels': strToU8(buildDocumentRelsXml()),
   };
 }
 
-export function buildDebtAnalysisDocumentXml(analysis: DebtAnalysisReport): string {
+export function buildDebtAnalysisDocumentXml(analysis: DebtAnalysisReport, aiAnalysis?: LlmDebtAnalysis): string {
   const body = [
     paragraph(buildReportTitle(analysis), { style: 'Title', align: 'center' }),
     buildDeclarationTable(),
@@ -133,12 +133,12 @@ export function buildDebtAnalysisDocumentXml(analysis: DebtAnalysisReport): stri
       `(4) 信用卡已用：${formatYuan(analysis.totalCardUsed)}（抓取所有在用信用卡的“已用额度”总和，${buildCardUsedNote(analysis.totalCardUsed)}）`,
     ),
     paragraph('2. 符合条件的信用卡分期方案', { style: 'Heading1' }),
-    paragraph(buildInstallmentCardText(analysis)),
+    paragraph(buildInstallmentCardText(analysis, aiAnalysis)),
     paragraph('3. 月供方案对比', { style: 'Heading1' }),
     paragraph(
       `原月供计算：根据征信报告中所有账户本月应还款总和计算，原月供总额为${formatYuan(analysis.originalMonthlyPayment)}。`,
     ),
-    buildPlanComparisonTable(analysis.plans),
+    buildPlanComparisonTable(analysis.plans, aiAnalysis),
     paragraph('方案说明与建议', { style: 'Heading1' }),
     paragraph(
       '上述为您出具的专属解决方案，具体执行细节建议当面沟通确认。操作全程遵循相关政策要求，次月即可实现还款金额下调，多出现金流、减轻生活负担，且不影响个人征信记录。',
@@ -174,16 +174,19 @@ function buildCardUsedNote(totalCardUsed: number): string {
   return `当前信用卡已用额度为${formatYuan(totalCardUsed)}`;
 }
 
-function buildInstallmentCardText(analysis: DebtAnalysisReport): string {
+function buildInstallmentCardText(analysis: DebtAnalysisReport, aiAnalysis?: LlmDebtAnalysis): string {
+  const aiText = normalizeInlineText(aiAnalysis?.installmentCardAnalysis ?? '');
+  const suffix = aiText ? ` ${ensureSentence(aiText)}` : '';
+
   if (analysis.installmentCards.length === 0) {
-    return `经筛选，您当前持有的信用卡中无符合条件的可分期银行（${TARGET_INSTALLMENT_BANKS}）信用卡账户。`;
+    return `经筛选，您当前持有的信用卡中无符合条件的可分期银行（${TARGET_INSTALLMENT_BANKS}）信用卡账户。${suffix}`;
   }
 
   const cards = analysis.installmentCards.map((card) => card.org).join('、');
-  return `经筛选，您当前持有的信用卡中符合条件的可分期银行账户为：${cards}。`;
+  return `经筛选，您当前持有的信用卡中符合条件的可分期银行账户为：${cards}。${suffix}`;
 }
 
-function buildPlanComparisonTable(plans: PaymentReductionPlan[]): string {
+function buildPlanComparisonTable(plans: PaymentReductionPlan[], aiAnalysis?: LlmDebtAnalysis): string {
   const planOrder = ['normal-optimization', 'mild-negotiation', 'term-extension', 'high-risk-resolution'];
   const orderedPlans = planOrder
     .map((key) => plans.find((plan) => plan.key === key))
@@ -202,17 +205,53 @@ function buildPlanComparisonTable(plans: PaymentReductionPlan[]): string {
       { text: formatTableNumber(plan.originalMonthlyPayment), align: 'center' },
       { text: formatTableNumber(plan.targetMonthlyPayment), align: 'center' },
       { text: formatTableNumber(plan.releasedCashFlow), align: 'center' },
-      PLAN_ADVANTAGES[plan.key] ?? buildFallbackPlanNote(plan),
+      buildPlanAnalysisText(plan, aiAnalysis),
     ]),
   ];
 
   return table(rows, [1500, 1400, 1700, 1900, 3100]);
 }
 
+function buildPlanAnalysisText(plan: PaymentReductionPlan, aiAnalysis?: LlmDebtAnalysis): string {
+  const comment = aiAnalysis?.planComments.find((item) => (
+    item.planKey === plan.key
+    || item.planName === plan.name
+    || item.planName === PLAN_LABELS[plan.key]
+  ));
+
+  if (!comment) return PLAN_ADVANTAGES[plan.key] ?? buildFallbackPlanNote(plan);
+
+  const parts = [
+    formatLabeledSentence('优势与适用性', comment.suitability),
+    formatLabeledList('执行前提', comment.prerequisites),
+    formatLabeledList('风险与劣势', comment.cautions),
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join('') : PLAN_ADVANTAGES[plan.key] ?? buildFallbackPlanNote(plan);
+}
+
 function buildFallbackPlanNote(plan: PaymentReductionPlan): string {
   const advantages = plan.advantages.length ? plan.advantages.join('；') : '需结合合同与账单确认';
   const risks = plan.risks.length ? plan.risks.join('；') : '需执行前复核';
   return `优势：${advantages}。劣势：${risks}`;
+}
+
+function formatLabeledSentence(label: string, value: string): string {
+  const text = normalizeInlineText(value);
+  return text ? `${label}：${ensureSentence(text)}` : '';
+}
+
+function formatLabeledList(label: string, values: string[]): string {
+  const text = values.map(normalizeInlineText).filter(Boolean).join('；');
+  return text ? `${label}：${ensureSentence(text)}` : '';
+}
+
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function ensureSentence(value: string): string {
+  return /[。！？.!?]$/.test(value) ? value : `${value}。`;
 }
 
 function table(rows: TableCellInput[][], widths: number[]): string {

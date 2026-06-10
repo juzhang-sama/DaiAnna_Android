@@ -13,6 +13,7 @@ import type {
   QueryFrequency, AssetStatus, CreditHistory,
 } from '../types/credit-profile';
 import { calcAgeAt, getReferenceDate, monthsBefore, parseDateLoose } from '../utils/date-utils';
+import { isActiveCreditCardStatus } from '../utils/credit-card-status';
 
 /** 计入查询次数的查询原因 */
 const COUNTED_QUERY_REASONS = ['贷款审批', '信用卡审批', '担保资格审查'];
@@ -102,12 +103,11 @@ function buildDebtStatus(r: CreditReport, referenceDate: Date): DebtStatus {
   }
 
   for (const card of cd.creditCards) {
-    const isClosed = /结清|销户|未激活/.test(card.status);
-    if (!isClosed) {
+    if (isActiveCreditCardStatus(card.status)) {
       totalCardUsed += card.usedAmount ?? 0;
       totalMonthlyPayment += card.monthlyPayment ?? 0;
+      totalCardLimit += card.creditLimit;
     }
-    totalCardLimit += card.creditLimit;
   }
 
   const cardUsageRate = totalCardLimit > 0
@@ -146,7 +146,9 @@ function buildAssetStatus(r: CreditReport): AssetStatus {
 
   let totalCardCreditLimit = 0;
   for (const card of r.creditDetail.creditCards) {
-    totalCardCreditLimit += card.creditLimit;
+    if (isActiveCreditCardStatus(card.status)) {
+      totalCardCreditLimit += card.creditLimit;
+    }
   }
 
   return { hasMortgage, hasAutoLoan, totalCardCreditLimit };

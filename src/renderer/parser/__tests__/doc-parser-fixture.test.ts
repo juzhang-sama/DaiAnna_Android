@@ -896,14 +896,74 @@ function createMismatchedFooterPageDoc(): DocParserResult {
   };
 }
 
-function createCreditCardTable(org: string, accountId: string, limit: string, status = '正常'): string {
+function createCreditCardTable(
+  org: string,
+  accountId: string,
+  limit: string,
+  status = '正常',
+  usedAmount = '0',
+  monthlyPayment = '0',
+  currency = '人民币元',
+): string {
   return [
     '| 发卡机构 | 账户标识 | 开立日期 | 账户授信额度 | 共享授信额度 | 币种 | 业务种类 | 担保方式 |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
-    `| ${org} | ${accountId} | 2017.12.18 | ${limit} | 0 | 人民币元 | 贷记卡 | 信用/无担保 |`,
+    `| ${org} | ${accountId} | 2017.12.18 | ${limit} | 0 | ${currency} | 贷记卡 | 信用/无担保 |`,
     '| 账户状态 | 已用额度 | 账单日 | 本月应还款 | 本月实还款 | 最近一次还款日期 | 当前逾期期数 | 当前逾期总额 |',
-    `| ${status} | 0 | 2026.05.16 | 0 | 0 | 2026.05.01 | 0 | 0 |`,
+    `| ${status} | ${usedAmount} | 2026.05.16 | ${monthlyPayment} | 0 | 2026.05.01 | 0 | 0 |`,
   ].join('\n');
+}
+
+function createSplitCreditCardLimitDoc(): DocParserResult {
+  return {
+    file_name: 'split-card-limit.pdf',
+    file_id: 'split-card-limit',
+    pages: [{
+      page_id: 'page-1',
+      page_num: 0,
+      text: '三 信贷交易信息明细\n（四）贷记卡账户\n账户3（授信协议标识：B10711000H00011）\n四 查询记录',
+      layouts: [
+        textLayout('l-credit-detail-split-card', '三 信贷交易信息明细', 80),
+        textLayout('l-card-split-card', '（四）贷记卡账户', 110),
+        textLayout('l-account-split-card', '账户3（授信协议标识：B10711000H00011）', 140),
+        tableLayout('t-card-split-left', 170, 80),
+        tableLayout('t-card-split-right', 170, 460),
+        textLayout('l-query-split-card', '四 查询记录', 360),
+      ],
+      tables: [
+        docTable(
+          't-card-split-left',
+          [
+            '| 发卡机构 | 账户标识 | 开立日期 |',
+            '| --- | --- | --- |',
+            '| 中国光大银行股份有限公司 | B10711000H00011 | 2017.12.18 |',
+          ].join('\n'),
+          170,
+          80,
+        ),
+        docTable(
+          't-card-split-right',
+          [
+            '| 账户授信额度 | 共享授信额度 | 币种 | 业务种类 | 担保方式 |',
+            '| --- | --- | --- | --- | --- |',
+            '| 50,000 | 0 | 人民币元 | 贷记卡 | 信用/无担保 |',
+            '| 账户状态 | 已用额度 | 账单日 | 本月应还款 | 本月实还款 |',
+            '| 正常 | 12,000 | 2026.05.16 | 1,200 | 0 |',
+          ].join('\n'),
+          170,
+          460,
+        ),
+      ],
+      images: [],
+      meta: {
+        page_width: 842,
+        page_height: 1191,
+        is_scan: true,
+        page_angle: 0,
+        page_type: 'normal',
+      },
+    }],
+  };
 }
 
 function createManyCreditCardsWithDamagedAnchorsDoc(): DocParserResult {
@@ -976,6 +1036,47 @@ function createHeaderlessCreditCardValueDoc(): DocParserResult {
       ],
       tables: [
         docTable('t-headerless-card', headerlessCard, 170),
+      ],
+      images: [],
+      meta: {
+        page_width: 842,
+        page_height: 1191,
+        is_scan: true,
+        page_angle: 0,
+        page_type: 'normal',
+      },
+    }],
+  };
+}
+
+function createMixedCreditCardStatusDoc(): DocParserResult {
+  return {
+    file_name: 'mixed-card-status.pdf',
+    file_id: 'mixed-card-status',
+    pages: [{
+      page_id: 'page-1',
+      page_num: 0,
+      text: '三 信贷交易信息明细\n（四）贷记卡账户\n账户1\n账户2\n四 查询记录',
+      layouts: [
+        textLayout('l-credit-detail-mixed-cards', '三 信贷交易信息明细', 80),
+        textLayout('l-card-mixed-cards', '（四）贷记卡账户', 110),
+        textLayout('l-account-mixed-card-1', '账户1', 140),
+        tableLayout('t-mixed-card-1', 170),
+        textLayout('l-account-mixed-card-2', '账户2', 250),
+        tableLayout('t-mixed-card-2', 280),
+        textLayout('l-query-mixed-cards', '四 查询记录', 380),
+      ],
+      tables: [
+        docTable(
+          't-mixed-card-1',
+          createCreditCardTable('广发银行股份有限公司', 'B10411C0001', '50,000', '正常', '12,000', '1,200'),
+          170,
+        ),
+        docTable(
+          't-mixed-card-2',
+          createCreditCardTable('招商银行股份有限公司', 'B10411C0002', '100,000', '结清', '40,000', '4,000'),
+          280,
+        ),
       ],
       images: [],
       meta: {
@@ -1084,6 +1185,62 @@ assert.equal(headerlessCardParsed.report.creditDetail.creditCards.length, 1);
 assert.equal(headerlessCard.org, '中国建设银 开发分');
 assert.equal(headerlessCard.creditLimit, 15000);
 assert.equal(headerlessCard.status, '正常');
+
+const mixedCardStatusParsed = parseCreditReport('', undefined, createMixedCreditCardStatusDoc());
+assert.equal(mixedCardStatusParsed.report.creditDetail.creditCards.length, 2);
+assert.deepEqual(
+  mixedCardStatusParsed.report.creditDetail.creditCards.map((account) => account.status),
+  ['正常', '销户'],
+);
+assert.equal(mixedCardStatusParsed.report.creditDetail.creditCards[1].usedAmount, null);
+assert.equal(mixedCardStatusParsed.report.accountDerived.creditCard?.accountCount, 2);
+assert.equal(mixedCardStatusParsed.report.accountDerived.creditCard?.totalCredit, 50000);
+assert.equal(mixedCardStatusParsed.report.accountDerived.creditCard?.balance, 12000);
+assert.equal(mixedCardStatusParsed.report.accountDerived.creditCard?.monthlyPayment, 1200);
+
+const splitCardLimitParsed = parseCreditReport('', undefined, createSplitCreditCardLimitDoc());
+assert.equal(splitCardLimitParsed.report.creditDetail.creditCards.length, 1);
+assert.equal(splitCardLimitParsed.report.creditDetail.creditCards[0].org, '中国光大银行股份有限公司');
+assert.equal(splitCardLimitParsed.report.creditDetail.creditCards[0].creditLimit, 50000);
+assert.equal(splitCardLimitParsed.report.creditDetail.creditCards[0].usedAmount, 12000);
+
+const inactiveAndForeignCardParsed = parseCreditReport('', undefined, {
+  file_name: 'inactive-foreign-card.pdf',
+  file_id: 'inactive-foreign-card',
+  pages: [{
+    page_id: 'page-1',
+    page_num: 0,
+    text: '三 信贷交易信息明细\n（四）贷记卡账户\n账户1\n账户2\n四 查询记录',
+    layouts: [
+      textLayout('l-credit-detail-inactive-foreign', '三 信贷交易信息明细', 80),
+      textLayout('l-card-inactive-foreign', '（四）贷记卡账户', 110),
+      textLayout('l-account-inactive', '账户1', 140),
+      tableLayout('t-card-inactive', 170),
+      textLayout('l-account-foreign', '账户2', 250),
+      tableLayout('t-card-foreign', 280),
+      textLayout('l-query-inactive-foreign', '四 查询记录', 380),
+    ],
+    tables: [
+      docTable('t-card-inactive', createCreditCardTable('未激活银行股份有限公司', 'B10411C0003', '30,000', '未激活', '8,000', '800'), 170),
+      docTable('t-card-foreign', createCreditCardTable('外币银行股份有限公司', 'B10411C0004', '40,000', '正常', '9,000', '900', '美元'), 280),
+    ],
+    images: [],
+    meta: {
+      page_width: 842,
+      page_height: 1191,
+      is_scan: true,
+      page_angle: 0,
+      page_type: 'normal',
+    },
+  }],
+});
+assert.deepEqual(
+  inactiveAndForeignCardParsed.report.creditDetail.creditCards.map((account) => account.status),
+  ['其他', '其他币种'],
+);
+assert.equal(inactiveAndForeignCardParsed.report.accountDerived.creditCard?.totalCredit, 0);
+assert.equal(inactiveAndForeignCardParsed.report.accountDerived.creditCard?.balance, 0);
+assert.equal(inactiveAndForeignCardParsed.report.accountDerived.creditCard?.monthlyPayment, 0);
 
 const parsed = parseCreditReport(fullText, undefined, createFixtureDoc());
 const repay = parsed.report.repayResponsibilities[0];

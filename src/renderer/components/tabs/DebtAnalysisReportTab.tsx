@@ -106,6 +106,22 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
     setAiError('');
   }, [report, readiness.blocked]);
 
+  const requestAiAnalysis = useCallback(async (): Promise<LlmDebtAnalysis> => {
+    setAiLoading(true);
+    setAiError('');
+    try {
+      const result = await getProfessionalDebtAnalysis(analysis);
+      setAiAnalysis(result);
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'AI 分析失败';
+      setAiError(msg);
+      throw err;
+    } finally {
+      setAiLoading(false);
+    }
+  }, [analysis]);
+
   const handleExportDocx = useCallback(async () => {
     if (!canExport) {
       message.warning('暂无可导出的分析数据');
@@ -119,11 +135,17 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
 
     setExportingDocx(true);
     try {
+      let nextAiAnalysis = aiAnalysis;
+      if (!nextAiAnalysis) {
+        message.info('正在生成 AI 分析后导出报告');
+        nextAiAnalysis = await requestAiAnalysis();
+      }
+
       const fileName = buildDebtAnalysisDocxFileName(report);
       if (platform.kind === 'capacitor' && platform.share?.shareFileData) {
         const base64 = buildDebtAnalysisDocxBase64(
           report,
-          undefined,
+          nextAiAnalysis,
           reviewState,
           diagnostics,
         );
@@ -134,7 +156,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
         });
         message.success('已打开系统分享');
       } else {
-        exportDebtAnalysisReportToDocx(report, fileName, undefined, reviewState, diagnostics);
+        exportDebtAnalysisReportToDocx(report, fileName, nextAiAnalysis, reviewState, diagnostics);
         message.success('分析报告已导出');
       }
     } catch (err) {
@@ -143,7 +165,7 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
     } finally {
       setExportingDocx(false);
     }
-  }, [canExport, diagnostics, exportingDocx, platform, readiness, report, reviewState]);
+  }, [aiAnalysis, canExport, diagnostics, exportingDocx, platform, readiness, report, requestAiAnalysis, reviewState]);
 
   const handleAiAnalysis = useCallback(async () => {
     if (!canExport) {
@@ -154,20 +176,13 @@ const DebtAnalysisReportTab: React.FC<DebtAnalysisReportTabProps> = ({ report, d
       message.warning(readiness.actionHint);
       return;
     }
-    setAiLoading(true);
-    setAiError('');
     try {
-      const result = await getProfessionalDebtAnalysis(analysis);
-      setAiAnalysis(result);
+      await requestAiAnalysis();
       message.success('AI 落地策略已生成');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'AI 分析失败';
-      setAiError(msg);
       message.error('AI 分析失败，请检查 DeepSeek 配置或稍后重试');
-    } finally {
-      setAiLoading(false);
     }
-  }, [analysis, canExport, readiness]);
+  }, [canExport, readiness, requestAiAnalysis]);
 
   const debtColumns: ColumnsType<DebtBreakdownItem> = [
     { title: '债务类别', dataIndex: 'label', key: 'label', width: 140 },

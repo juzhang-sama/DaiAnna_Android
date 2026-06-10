@@ -9,6 +9,7 @@ import type {
   CreditReportValidationReport,
   DiagnosticSeverity,
 } from '../types/ocr-diagnostics';
+import { isActiveCreditCardStatus, isClosedCreditCardStatus } from '../utils/credit-card-status';
 
 type IssueInput = Omit<CreditReportValidationIssue, 'id'>;
 
@@ -112,7 +113,7 @@ function validateCreditCards(
   push: (issue: IssueInput) => void,
 ): void {
   accounts.forEach((account, index) => {
-    const active = !isClosed(account.status);
+    const active = isActiveCreditCardStatus(account.status);
     const prefix = `creditCards[${index}]`;
     if (!account.org) {
       push(issue('warning', '贷记卡账户', `${prefix}.org`, `贷记卡第${index + 1}笔发卡机构未识别`, '请对照原文核对发卡机构。'));
@@ -123,8 +124,8 @@ function validateCreditCards(
     if (active && account.usedAmount !== null && account.creditLimit > 0 && account.usedAmount > account.creditLimit * 1.15) {
       push(issue('critical', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}已用额度大于授信额度`, '请优先核对已用额度和授信额度，可能存在列错位或多读数字。'));
     }
-    if (isClosed(account.status) && (account.usedAmount ?? 0) > 0) {
-      push(issue('warning', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}销户/结清账户仍有已用额度`, '请核对账户状态和已用额度。'));
+    if (isClosedCreditCardStatus(account.status) && (account.usedAmount ?? 0) > 0) {
+      push(issue('warning', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}销户账户仍有已用额度`, '请核对账户状态和已用额度。'));
     }
   });
 }

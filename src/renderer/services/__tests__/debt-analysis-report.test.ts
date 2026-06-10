@@ -4,6 +4,7 @@ import {
   type CreditCardAccount,
   type LoanAccount,
 } from '../../types/credit-report';
+import { buildCreditProfile } from '../credit-profile-builder';
 import { buildDebtAnalysisReport } from '../debt-analysis-report';
 
 function makeLoan(partial: Partial<LoanAccount>): LoanAccount {
@@ -133,3 +134,43 @@ assert.equal(cardAnalysis.activeCardCount, 1);
 assert.equal(cardAnalysis.installmentCards[0].availableLimit, 38000);
 assert.equal(cardAnalysis.installmentCards[0].usageRate, 0.24);
 assert.equal(cardAnalysis.installmentCards[0].reason, '机构在可重点核查名单内');
+
+const mixedCardReport = createEmptyCreditReport();
+mixedCardReport.accountDerived.creditCard = {
+  orgCount: 2,
+  accountCount: 2,
+  totalCredit: 150000,
+  balance: 52000,
+  monthlyPayment: 5200,
+};
+mixedCardReport.creditDetail.creditCards = [
+  makeCard({
+    org: '广发银行股份有限公司',
+    creditLimit: 50000,
+    usedAmount: 12000,
+    monthlyPayment: 1200,
+    status: '正常',
+  }),
+  makeCard({
+    org: '招商银行股份有限公司',
+    creditLimit: 100000,
+    usedAmount: 40000,
+    monthlyPayment: 4000,
+    status: '销户',
+  }),
+];
+
+const mixedCardAnalysis = buildDebtAnalysisReport(mixedCardReport);
+assert.equal(mixedCardAnalysis.debtTotal, 12000);
+assert.equal(mixedCardAnalysis.activeCardCount, 1);
+assert.equal(mixedCardAnalysis.totalCardUsed, 12000);
+assert.equal(mixedCardAnalysis.totalCardLimit, 50000);
+assert.equal(mixedCardAnalysis.originalMonthlyPayment, 1200);
+assert.equal(mixedCardAnalysis.metrics.cardUsageRate, 0.24);
+assert.deepEqual(mixedCardAnalysis.installmentCards.map((card) => card.org), ['广发银行股份有限公司']);
+
+const mixedCardProfile = buildCreditProfile(mixedCardReport);
+assert.equal(mixedCardProfile.debtStatus.totalCardUsed, 12000);
+assert.equal(mixedCardProfile.debtStatus.totalMonthlyPayment, 1200);
+assert.equal(mixedCardProfile.debtStatus.cardUsageRate, 0.24);
+assert.equal(mixedCardProfile.assetStatus.totalCardCreditLimit, 50000);

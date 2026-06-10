@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Grid, Table, Tabs } from 'antd';
+import { Alert, Grid, Select, Table, Tabs } from 'antd';
 import type { AccountDerivedMap, AccountDerivedSummary, CreditReport } from '../../types/credit-report';
 import EditableCell from '../EditableCell';
+import { CREDIT_CARD_STATUS_OPTIONS } from '../../utils/credit-card-status';
 import {
   buildReviewFieldDomId,
   type CreditReviewSectionKey,
@@ -68,6 +69,8 @@ const CreditDetailTab: React.FC<CreditDetailTabProps> = ({ report, onChange, rev
     { text: '止付', value: '止付' },
   ];
 
+  const CREDIT_CARD_STATUS_FILTERS = CREDIT_CARD_STATUS_OPTIONS.map((status) => ({ text: status, value: status }));
+
   const reviewProps = (field: string) => {
     const reviewFieldId = buildReviewFieldDomId(field);
     return {
@@ -98,6 +101,38 @@ const CreditDetailTab: React.FC<CreditDetailTabProps> = ({ report, onChange, rev
       );
     },
     filters: STATUS_FILTERS,
+    onFilter: (value: any, record: any) => record.status === value,
+  });
+
+  const editableCreditCardStatusColumn = (
+    updater: (i: number, f: string, v: string | number | null) => void,
+  ) => ({
+    title: '账户状态',
+    dataIndex: 'status',
+    key: 'status',
+    width: 110,
+    render: (v: string, rec: any) => {
+      const rowIndex = Number(rec.key);
+      const review = reviewProps(rowField('creditCards', rowIndex, 'status'));
+      return (
+        <span
+          id={review.reviewFieldId}
+          className={[
+            'review-editable-cell',
+            review.reviewFocused ? 'review-field-target' : '',
+          ].filter(Boolean).join(' ')}
+        >
+          <Select
+            size="small"
+            value={CREDIT_CARD_STATUS_OPTIONS.includes(v as any) ? v : '其他'}
+            onChange={(next) => updater(rowIndex, 'status', next)}
+            options={CREDIT_CARD_STATUS_OPTIONS.map((status) => ({ label: status, value: status }))}
+            style={{ minWidth: 96 }}
+          />
+        </span>
+      );
+    },
+    filters: CREDIT_CARD_STATUS_FILTERS,
     onFilter: (value: any, record: any) => record.status === value,
   });
 
@@ -306,7 +341,7 @@ const CreditDetailTab: React.FC<CreditDetailTabProps> = ({ report, onChange, rev
             columns={[
               { title: '发卡机构', dataIndex: 'org', key: 'org', width: 220, fixed: 'left' as const, render: editableText('creditCards', 'org', updateCard) },
               { title: '账户授信额度', dataIndex: 'creditLimit', key: 'creditLimit', width: 120, render: editableNum('creditCards', 'creditLimit', updateCard) },
-              editableStatusColumn('creditCards', updateCard),
+              editableCreditCardStatusColumn(updateCard),
               { title: '已用额度', dataIndex: 'usedAmount', key: 'usedAmount', width: 120, render: editableNum('creditCards', 'usedAmount', updateCard) },
               { title: '账单日', dataIndex: 'billDate', key: 'billDate', width: 100, render: editableText('creditCards', 'billDate', updateCard) },
               { title: '本月应还', dataIndex: 'monthlyPayment', key: 'monthlyPayment', width: 100, render: editableNum('creditCards', 'monthlyPayment', updateCard) },

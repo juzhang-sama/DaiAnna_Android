@@ -60,6 +60,10 @@ function hasConflictingLabelMeaning(value: string, target: string): boolean {
     ['开立日期', '到期日期'],
     ['本月应还款', '本月实还款'],
     ['查询机构', '管理机构'],
+    ['授信协议标识', '账户授信额度'],
+    ['授信协议标识', '授信额度'],
+    ['账户标识', '账户授信额度'],
+    ['账户标识', '授信额度'],
   ];
 
   return exclusivePairs.some(([left, right]) =>
@@ -132,20 +136,41 @@ export function findValueByLabelsInRows(
   kind: TableValueKind = 'text',
 ): string {
   const labelList = Array.isArray(labels) ? labels : [labels];
+  const matches: Array<{ value: string; score: number; rowIdx: number; colIdx: number }> = [];
   for (let rowIdx = 0; rowIdx < allRows.length; rowIdx++) {
     const row = allRows[rowIdx] ?? [];
     for (let colIdx = 0; colIdx < row.length; colIdx++) {
       const cell = row[colIdx] ?? '';
-      if (!labelList.some((label) => matchesLabel(cell, label))) continue;
+      const matchedLabel = labelList.find((label) => matchesLabel(cell, label));
+      if (!matchedLabel) continue;
 
       const candidates = collectValueCandidates(allRows, rowIdx, colIdx, labelList);
       for (const candidate of candidates) {
-        const value = normalizeTableCandidate(candidate, labelList, kind);
-        if (value) return value;
+        const value = normalizeTableCandidate(candidate.raw, labelList, kind);
+        if (!value) continue;
+        const score = scoreTableCandidate({
+          labelCell: cell,
+          matchedLabel,
+          raw: candidate.raw,
+          value,
+          kind,
+          rowDistance: candidate.rowDistance,
+          colDistance: candidate.colDistance,
+          source: candidate.source,
+        });
+        if (score > 0) matches.push({ value, score, rowIdx, colIdx });
       }
     }
   }
-  return '';
+  matches.sort((a, b) => b.score - a.score || a.rowIdx - b.rowIdx || a.colIdx - b.colIdx);
+  return matches[0]?.value ?? '';
+}
+
+interface TableCandidate {
+  raw: string;
+  rowDistance: number;
+  colDistance: number;
+  source: 'inline' | 'right' | 'below';
 }
 
 function collectValueCandidates(
@@ -153,17 +178,17 @@ function collectValueCandidates(
   rowIdx: number,
   colIdx: number,
   labels: string[],
-): string[] {
+): TableCandidate[] {
   const row = allRows[rowIdx] ?? [];
   const nextRow = allRows[rowIdx + 1] ?? [];
-  const candidates: string[] = [];
+  const candidates: TableCandidate[] = [];
 
-  candidates.push(extractInlineValue(row[colIdx] ?? '', labels));
-  candidates.push(row[colIdx + 1] ?? '');
-  candidates.push(row[colIdx + 2] ?? '');
+  candidates.push({ raw: extractInlineValue(row[colIdx] ?? '', labels), rowDistance: 0, colDistance: 0, source: 'inline' });
+  candidates.push({ raw: row[colIdx + 1] ?? '', rowDistance: 0, colDistance: 1, source: 'right' });
+  candidates.push({ raw: row[colIdx + 2] ?? '', rowDistance: 0, colDistance: 2, source: 'right' });
 
   for (let offset = 0; offset <= 2; offset++) {
-    candidates.push(nextRow[colIdx + offset] ?? '');
+    candidates.push({ raw: nextRow[colIdx + offset] ?? '', rowDistance: 1, colDistance: offset, source: 'below' });
   }
 
   return candidates;
@@ -207,11 +232,52 @@ function extractAmountCandidate(raw: string): string {
   const text = raw.trim().replace(/[￥¥元]/g, '');
   if (!text || looksLikeDate(text)) return '';
   if (/^[-—－]+$/.test(text)) return '0';
+  if (looksLikeIdentifier(text)) return '';
   const match = text.match(/-?\d[\d,.]*/);
   if (!match) return '';
   const value = match[0];
   if (looksLikeDate(value)) return '';
   return value;
+}
+
+function scoreTableCandidate(input: {
+  labelCell: string;
+  matchedLabel: string;
+  raw: string;
+  value: string;
+  kind: TableValueKind;
+  rowDistance: number;
+  colDistance: number;
+  source: TableCandidate['source'];
+}): number {
+  const normalizedLabel = normalizeLabelCell(input.labelCell);
+  const normalizedTarget = normalizeLabelCell(input.matchedLabel);
+  const raw = input.raw;
+  const rawCompact = raw.replace(/\s+/g, '');
+  if (hasConflictingLabelMeaning(normalizedLabel, normalizedTarget)) return 0;
+
+  let score = normalizedLabel === normalizedTarget ? 120 : 80;
+  if (normalizedLabel.includes(normalizedTarget)) score += 20;
+  if (input.source === 'inline') score += 18;
+  if (input.source === 'below' && input.colDistance === 0) score += 42;
+  if (input.source === 'below' && input.colDistance > 0) score -= 12;
+  if (input.source === 'right') score -= 6;
+  if (input.rowDistance === 1) score += 12;
+  if (input.colDistance === 0) score += 8;
+  if (input.colDistance > 1) score -= 8;
+
+  if (input.kind === 'amount') {
+    if (looksLikeIdentifier(rawCompact)) return 0;
+    if (/授信协议标识|账户标识|协议标识/.test(rawCompact)) return 0;
+    if (/^[A-Za-z]/.test(rawCompact)) return 0;
+    if (/账户授信额度|授信额度/.test(normalizedLabel)) score += 40;
+    if (/金额|额度|余额|还款/.test(normalizedLabel)) score += 12;
+    if (/元|￥|¥|,/.test(raw)) score += 8;
+    if (/^\d{1,2}$/.test(input.value)) score -= 20;
+  }
+
+  if (input.kind === 'date' && looksLikeDate(input.value)) score += 20;
+  return score;
 }
 
 function extractDateCandidate(raw: string): string {
@@ -225,6 +291,11 @@ function extractDateCandidate(raw: string): string {
 function looksLikeDate(value: string): boolean {
   return /\d{4}[.\-/年]\d{1,2}[.\-/月]\d{1,2}日?/.test(value) ||
     /\d{4}\s*年/.test(value);
+}
+
+function looksLikeIdentifier(value: string): boolean {
+  const compact = value.replace(/[^A-Za-z0-9]/g, '');
+  return /[A-Za-z]/.test(compact) && /\d/.test(compact) && compact.length >= 8;
 }
 
 function isLabelLike(value: string): boolean {

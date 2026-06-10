@@ -90,13 +90,27 @@ assert.doesNotMatch(documentXml, /详细版|简要版|AI理财师执行策略|OC
 assert.equal(buildDebtAnalysisDocxFileName(report), '测试客户-降低月供分析简版报告.docx');
 
 const optionalFiles = buildDebtAnalysisDocxFiles(report, {
-  executiveSummary: '不应写入导出文档',
-  primaryPressureSources: ['不应写入'],
+  executiveSummary: '不应作为新增章节写入导出文档',
+  primaryPressureSources: ['不应作为新增章节写入'],
+  installmentCardAnalysis: 'LLM建议补充信用卡账单核验，确认是否存在未体现在征信中的可分期空间。',
   priorityActions: [],
-  planComments: [],
+  planComments: [
+    {
+      planKey: 'mild-negotiation',
+      planName: '减轻影响征信方案',
+      suitability: 'LLM判断该方案适合优先评估，因为消费贷与经营贷月供占比较高。',
+      prerequisites: ['核验机构政策', '确认客户流水'],
+      cautions: ['可能体现账户调整信息'],
+    },
+  ],
   executionSteps: [],
   requiredMaterials: [],
   riskWarnings: [],
 });
 const optionalDocumentXml = strFromU8(optionalFiles['word/document.xml']);
-assert.doesNotMatch(optionalDocumentXml, /不应写入导出文档/);
+assert.match(optionalDocumentXml, /LLM建议补充信用卡账单核验/);
+assert.match(optionalDocumentXml, /优势与适用性：LLM判断该方案适合优先评估/);
+assert.match(optionalDocumentXml, /执行前提：核验机构政策；确认客户流水/);
+assert.match(optionalDocumentXml, /风险与劣势：可能体现账户调整信息/);
+assert.doesNotMatch(optionalDocumentXml, /AI理财师执行策略|OCR数据底稿|风险边界/);
+assert.doesNotMatch(optionalDocumentXml, /不应作为新增章节写入导出文档/);

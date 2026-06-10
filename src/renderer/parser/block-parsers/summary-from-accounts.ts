@@ -13,6 +13,7 @@ import type { ContextTable } from '../doc-table-bridge';
 import { groupAccountTables } from '../doc-table-bridge';
 import { getFieldMapping, type AccountCategory } from '../account-field-mappings';
 import { findTableValueByLabels } from './loan-table-utils';
+import { isActiveCreditCardStatus, normalizeCreditCardStatus } from '../../utils/credit-card-status';
 
 /** 单个账户提取的关键字段 */
 interface AccountFields {
@@ -21,6 +22,7 @@ interface AccountFields {
   balance: number;
   monthlyPayment: number;
   isClosed: boolean;
+  includeCreditAmount: boolean;
 }
 
 /** 按类别聚合的汇总结果 */
@@ -100,13 +102,16 @@ function extractFieldsFromDocTable(ct: ContextTable, category: AccountCategory):
   let monthlyPayment = parseDocNum(
     findTableValueByLabels(t, [mapping.monthlyPayment, '本月应还', '应还款额', '本期应还'], 'amount'),
   );
-  const statusVal = findTableValueByLabels(t, mapping.accountStatus);
+  const rawStatus = findTableValueByLabels(t, mapping.accountStatus);
+  const currency = category === 'creditCard' ? findTableValueByLabels(t, '币种') : '';
+  const statusVal = category === 'creditCard' ? normalizeCreditCardStatus(rawStatus, currency) : rawStatus;
 
   // 判断是否结清
-  const isClosed = /结清|销户/.test(statusVal);
+  const isClosed = category === 'creditCard' ? !isActiveCreditCardStatus(statusVal) : /结清|销户/.test(statusVal);
   if (isClosed) monthlyPayment = 0;
+  const includeCreditAmount = category === 'creditCard' ? !isClosed : true;
 
-  return { orgName, creditAmount, balance, monthlyPayment, isClosed };
+  return { orgName, creditAmount, balance, monthlyPayment, isClosed, includeCreditAmount };
 }
 
 /** 解析文档解析返回的数值字符串 */
@@ -135,19 +140,20 @@ function classifyAccount(parent: Level2Block): string {
 function extractAccountFields(
   lines: string[], account: AccountBlock, table?: RebuiltTable,
 ): AccountFields {
-  const isClosed = lines.some((l) =>
-    /^[√✓]?(结清|提前结清|销户|呆账)$/.test(l.trim()),
-  );
-
   const category = classifyAccount(account.parentBlock) as AccountCategory;
+  const rawStatusText = lines.join(' ');
+  const isClosed = category === 'creditCard'
+    ? !isActiveCreditCardStatus(normalizeCreditCardStatus(rawStatusText))
+    : lines.some((l) => /^[√✓]?(结清|提前结清|销户|呆账)$/.test(l.trim()));
   const mapping = getFieldMapping(category);
 
   const orgName = findOrgName(lines, mapping.org);
   const creditAmount = findLabeledNumber(lines, mapping.creditAmount);
   const balance = findLabeledNumber(lines, mapping.balance);
   const monthlyPayment = isClosed ? 0 : findLabeledNumber(lines, mapping.monthlyPayment);
+  const includeCreditAmount = category === 'creditCard' ? !isClosed : true;
 
-  return { orgName, creditAmount, balance, monthlyPayment, isClosed };
+  return { orgName, creditAmount, balance, monthlyPayment, isClosed, includeCreditAmount };
 }
 
 /** 聚合一组账户字段为汇总值 */
@@ -159,7 +165,7 @@ function aggregateFields(fieldsList: AccountFields[]): AccountDerivedSummary {
 
   for (const f of fieldsList) {
     if (f.orgName) orgs.add(f.orgName);
-    totalCredit += f.creditAmount;
+    if (f.includeCreditAmount) totalCredit += f.creditAmount;
     if (!f.isClosed) {
       balance += f.balance;
       monthlyPayment += f.monthlyPayment;

@@ -28,6 +28,7 @@ import { buildClientProfile } from './block-parsers/profile-bridge';
 import { findTableValueByLabels, parseNum } from './block-parsers/loan-table-utils';
 import type { RebuiltTable } from './table-rebuilder';
 import type { DocParserResult } from '../../shared/doc-parser-types';
+import { isActiveCreditCardStatus, isClosedCreditCardStatus } from '../utils/credit-card-status';
 import {
   extractTablesFromDoc,
   flattenAccountSegments,
@@ -364,14 +365,21 @@ function enrichDerivedFromParsedAccounts(report: CreditReport): AccountDerivedMa
     nonRevolvingLoan: mergeDerivedSummary(report.accountDerived.nonRevolvingLoan, detail.nonRevolvingLoan, briefs.nonRevolvingLoan),
     revolvingLoan1: mergeDerivedSummary(report.accountDerived.revolvingLoan1, detail.revolvingLoan1, briefs.revolvingLoan1),
     revolvingLoan2: mergeDerivedSummary(report.accountDerived.revolvingLoan2, detail.revolvingLoan2, briefs.revolvingLoan2),
-    creditCard: mergeDerivedSummary(report.accountDerived.creditCard, detail.creditCard, briefs.creditCard),
+    creditCard: mergeDerivedSummary(report.accountDerived.creditCard, detail.creditCard, briefs.creditCard, {
+      preferParsedAmounts: true,
+    }),
   };
 }
 
 function mergeDerivedSummary(
   current: AccountDerivedSummary | undefined,
-  ...fallbacks: Array<AccountDerivedSummary | undefined>
+  ...fallbacksAndOptions: Array<AccountDerivedSummary | undefined | { preferParsedAmounts?: boolean }>
 ): AccountDerivedSummary | undefined {
+  const maybeOptions = fallbacksAndOptions[fallbacksAndOptions.length - 1];
+  const options = maybeOptions && !('accountCount' in maybeOptions)
+    ? maybeOptions as { preferParsedAmounts?: boolean }
+    : {};
+  const fallbacks = (options === maybeOptions ? fallbacksAndOptions.slice(0, -1) : fallbacksAndOptions) as Array<AccountDerivedSummary | undefined>;
   const parsed = fallbacks.find((fallback) => (fallback?.accountCount ?? 0) > 0);
   let next = current ? { ...current } : undefined;
   for (const fallback of fallbacks) {
@@ -390,9 +398,9 @@ function mergeDerivedSummary(
     next = next ? { ...next } : { ...parsed };
     next.accountCount = parsed.accountCount;
     if (parsed.orgCount > 0) next.orgCount = parsed.orgCount;
-    if (parsed.totalCredit > 0) next.totalCredit = parsed.totalCredit;
-    if (parsed.balance > 0) next.balance = parsed.balance;
-    if (parsed.monthlyPayment > 0) next.monthlyPayment = parsed.monthlyPayment;
+    if (options.preferParsedAmounts || parsed.totalCredit > 0) next.totalCredit = parsed.totalCredit;
+    if (options.preferParsedAmounts || parsed.balance > 0) next.balance = parsed.balance;
+    if (options.preferParsedAmounts || parsed.monthlyPayment > 0) next.monthlyPayment = parsed.monthlyPayment;
   }
   return next;
 }
@@ -438,8 +446,8 @@ function aggregateCardDetails(accounts: CreditCardAccount[]): AccountDerivedSumm
 
   for (const account of accounts) {
     if (account.org) orgs.add(account.org);
+    if (!isActiveCreditCardStatus(account.status)) continue;
     totalCredit += account.creditLimit ?? 0;
-    if (/结清|销户|未激活/.test(account.status)) continue;
     balance += account.usedAmount ?? 0;
     monthlyPayment += account.monthlyPayment ?? 0;
   }
@@ -469,8 +477,11 @@ function aggregateBriefs(briefs: AccountBrief[] | undefined): AccountDerivedSumm
   let monthlyPayment = 0;
   for (const brief of briefs) {
     if (brief.org) orgs.add(brief.org);
-    totalCredit += brief.creditAmount ?? 0;
-    if (brief.isClosed) continue;
+    const isCreditCard = brief.category === 'creditCard';
+    const isClosed = isCreditCard ? !isActiveCreditCardStatus(brief.status) : brief.isClosed;
+    if (!isCreditCard) totalCredit += brief.creditAmount ?? 0;
+    if (isClosed) continue;
+    if (isCreditCard) totalCredit += brief.creditAmount ?? 0;
     balance += brief.balance ?? 0;
     monthlyPayment += brief.monthlyPayment ?? 0;
   }
