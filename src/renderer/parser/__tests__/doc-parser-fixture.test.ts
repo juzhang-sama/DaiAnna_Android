@@ -1190,7 +1190,7 @@ const mixedCardStatusParsed = parseCreditReport('', undefined, createMixedCredit
 assert.equal(mixedCardStatusParsed.report.creditDetail.creditCards.length, 2);
 assert.deepEqual(
   mixedCardStatusParsed.report.creditDetail.creditCards.map((account) => account.status),
-  ['正常', '销户'],
+  ['正常', '其他'],
 );
 assert.equal(mixedCardStatusParsed.report.creditDetail.creditCards[1].usedAmount, null);
 assert.equal(mixedCardStatusParsed.report.accountDerived.creditCard?.accountCount, 2);
@@ -1236,7 +1236,7 @@ const inactiveAndForeignCardParsed = parseCreditReport('', undefined, {
 });
 assert.deepEqual(
   inactiveAndForeignCardParsed.report.creditDetail.creditCards.map((account) => account.status),
-  ['其他', '其他币种'],
+  ['其他', '其他'],
 );
 assert.equal(inactiveAndForeignCardParsed.report.accountDerived.creditCard?.totalCredit, 0);
 assert.equal(inactiveAndForeignCardParsed.report.accountDerived.creditCard?.balance, 0);

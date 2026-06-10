@@ -125,7 +125,7 @@ function validateCreditCards(
       push(issue('critical', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}已用额度大于授信额度`, '请优先核对已用额度和授信额度，可能存在列错位或多读数字。'));
     }
     if (isClosedCreditCardStatus(account.status) && (account.usedAmount ?? 0) > 0) {
-      push(issue('warning', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}销户账户仍有已用额度`, '请核对账户状态和已用额度。'));
+      push(issue('warning', '贷记卡账户', `${prefix}.usedAmount`, `${account.org || '贷记卡'}非正常账户仍有已用额度`, '请核对账户状态和已用额度。'));
     }
   });
 }

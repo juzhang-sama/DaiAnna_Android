@@ -156,7 +156,7 @@ mixedCardReport.creditDetail.creditCards = [
     creditLimit: 100000,
     usedAmount: 40000,
     monthlyPayment: 4000,
-    status: '销户',
+    status: '其他',
   }),
 ];
 
